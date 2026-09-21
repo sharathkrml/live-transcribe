@@ -44,6 +44,17 @@ def test_empty_specs_give_nothing():
     assert build_extra_profiles("") == {}
 
 
+# ------------------------------------------------------------------ profiles
+
+
+def test_auto_en_profile_auto_detects_and_translates():
+    asr = backends.PROFILES["auto-en"]()
+    assert isinstance(asr, backends.WhisperASR)
+    assert asr.language is None  # None -> whisper auto-detects
+    assert asr.task == "translate"
+    assert backends.PROFILE_INFO["auto-en"]["needs_mt"] is False
+
+
 # ------------------------------------------------------------- parakeet run
 
 

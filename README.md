@@ -66,6 +66,7 @@ Pick from the dropdown. Adding a pair is one entry in `PROFILES`
 | `ja-ja` | `kotoba-whisper-v2.0-mlx`, transcribe |
 | `ja-en` | kotoba transcribes, then NLLB-600M translates |
 | `ja-en-fast` | `whisper-large-v3-turbo` built-in `task=translate` (no `--extra mt`) |
+| `auto-en` | `whisper-large-v3-turbo` auto-detects the language, then built-in `task=translate` to English |
 
 More models need no code change — point at anything in the local
 Hugging Face cache (or any repo id / local snapshot dir):

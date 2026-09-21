@@ -184,6 +184,7 @@ PROFILES = {
         NLLBTranslator(),
     ),
     "ja-en-fast": lambda: WhisperASR(DEFAULT_ASR, "ja", "translate"),
+    "auto-en": lambda: WhisperASR(DEFAULT_ASR, None, "translate"),
 }
 
 PROFILE_INFO = {
@@ -192,6 +193,7 @@ PROFILE_INFO = {
     "ja-ja": {"label": "Japanese", "detail": "Kotoba Whisper", "needs_mt": False},
     "ja-en": {"label": "Japanese → English", "detail": "Kotoba + NLLB", "needs_mt": True},
     "ja-en-fast": {"label": "Japanese → English (fast)", "detail": "Whisper built-in translate", "needs_mt": False},
+    "auto-en": {"label": "Auto → English", "detail": "Whisper auto-detect + translate", "needs_mt": False},
 }
 
 
