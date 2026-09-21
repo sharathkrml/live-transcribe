@@ -65,8 +65,8 @@ Pick from the dropdown. Adding a pair is one entry in `PROFILES`
 | `en-en-parakeet` | `parakeet-tdt-0.6b-v2` via MLX (English-only, fast) |
 | `ja-ja` | `kotoba-whisper-v2.0-mlx`, transcribe |
 | `ja-en` | kotoba transcribes, then NLLB-600M translates |
-| `ja-en-fast` | `whisper-large-v3-turbo` built-in `task=translate` (no `--extra mt`) |
-| `auto-en` | `whisper-large-v3-turbo` auto-detects the language, then built-in `task=translate` to English |
+| `ja-en-fast` | `whisper-large-v3` built-in `task=translate` (no `--extra mt`) |
+| `auto-en` | `whisper-large-v3` auto-detects the language, then built-in `task=translate` to English |
 
 More models need no code change — point at anything in the local
 Hugging Face cache (or any repo id / local snapshot dir):
@@ -78,6 +78,9 @@ LT_ASR_MODELS="small=mlx-community/whisper-small-mlx,ft=./models/my-parakeet" ma
 
 `LT_PARAKEET_MODEL` swaps the repo behind `en-en-parakeet`, and
 `LT_ASR_MODEL` / `LT_JA_ASR_MODEL` do the same for the Whisper profiles.
+`LT_TRANSLATE_MODEL` backs the translate profiles (`auto-en`, `ja-en-fast`) —
+it defaults to full `whisper-large-v3` because `large-v3-turbo` silently
+ignores `task="translate"` and transcribes instead.
 
 Switching profiles reloads that profile's models and restarts transcription
 from the current position.
@@ -90,6 +93,7 @@ from the current position.
 | `LT_LOOKAHEAD` | `10.0` | seconds of transcript to keep ahead of the playhead |
 | `LT_PROFILE` | `en-en` | profile to start with |
 | `LT_ASR_MODEL` | `mlx-community/whisper-large-v3-turbo` | primary ASR repo |
+| `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | translate-profile ASR repo |
 | `LT_JA_ASR_MODEL` | `kaiinui/kotoba-whisper-v2.0-mlx` | Japanese ASR repo |
 | `LT_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v2` | Parakeet ASR repo |
 | `LT_ASR_MODELS` | — | extra `name=repo` profiles, comma-separated (local dirs OK) |

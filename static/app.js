@@ -19,6 +19,7 @@ const el = {
   clock: $("clock"),
   note: $("note"),
   empty: $("empty"),
+  reset: $("reset"),
   open: $("open"),
   emptyOpen: $("empty-open"),
   fallback: $("fallback"),
@@ -618,6 +619,40 @@ function restore(media) {
   applyMedia(media.path, media, "/media");
 }
 
+function resetSession() {
+  clearCues();
+  S.hasMedia = false;
+  S.duration = 0;
+  S.mediaInfo = null;
+  S.playback = null;
+  S.videoReady = false;
+  S.warming = false;
+  S.pendingVideo = null;
+  S.phase = "idle";
+  el.video.pause();
+  el.video.removeAttribute("src");
+  el.video.load();
+  el.session.hidden = true;
+  el.reset.hidden = true;
+  el.open.hidden = true;
+  setStatus("");
+  paintPhase();
+}
+
+async function resetAndPick() {
+  if (S.busy) return;
+  try {
+    await fetch("/api/reset", { method: "POST" });
+  } catch {}
+  resetSession();
+  if (el.fallback.hidden === false) {
+    el.fallbackPath.value = "";
+    el.fallbackPath.focus();
+  } else {
+    pick();
+  }
+}
+
 function applyMedia(path, info, url) {
   clearCues();
   S.hasMedia = true;
@@ -632,6 +667,7 @@ function applyMedia(path, info, url) {
   el.fileName.title = path;
   el.session.hidden = false;
   if (el.fallback.hidden) el.open.hidden = false;
+  el.reset.hidden = false;
   el.empty.hidden = true;
   el.video.removeAttribute("src");
   backfill();
@@ -664,6 +700,7 @@ function attachVideo(url, info) {
 // ----------------------------------------------------------------- wiring
 
 el.open.onclick = pick;
+el.reset.onclick = resetAndPick;
 el.emptyOpen.onclick = pick;
 el.fallback.onsubmit = (event) => {
   event.preventDefault();

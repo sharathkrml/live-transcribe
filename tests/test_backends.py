@@ -55,6 +55,14 @@ def test_auto_en_profile_auto_detects_and_translates():
     assert backends.PROFILE_INFO["auto-en"]["needs_mt"] is False
 
 
+def test_translate_profiles_avoid_turbo():
+    # large-v3-turbo silently ignores task="translate" (it transcribes instead),
+    # so these profiles must run on a translate-capable model.
+    assert backends.TRANSLATE_ASR != backends.DEFAULT_ASR
+    for name in ("auto-en", "ja-en-fast"):
+        assert backends.PROFILES[name]().model == backends.TRANSLATE_ASR
+
+
 # ------------------------------------------------------------- parakeet run
 
 

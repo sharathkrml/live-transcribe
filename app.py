@@ -255,6 +255,15 @@ def seek(req: SeekReq) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/reset")
+def reset() -> dict:
+    """Drop the current session so the next open starts fresh."""
+    _teardown()
+    session.path = None
+    session.playback = None
+    return {"ok": True}
+
+
 @app.post("/api/profile")
 def set_profile(req: ProfileReq) -> dict:
     try:

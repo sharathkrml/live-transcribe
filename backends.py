@@ -13,6 +13,9 @@ from pathlib import Path
 from pipeline import Cue
 
 DEFAULT_ASR = os.environ.get("LT_ASR_MODEL", "mlx-community/whisper-large-v3-turbo")
+# large-v3-turbo silently ignores task="translate" (it just transcribes), so the
+# translate profiles need the full large-v3 weights.
+TRANSLATE_ASR = os.environ.get("LT_TRANSLATE_MODEL", "mlx-community/whisper-large-v3-mlx")
 KOTOBA_ASR = os.environ.get("LT_JA_ASR_MODEL", "kaiinui/kotoba-whisper-v2.0-mlx")
 PARAKEET_ASR = os.environ.get("LT_PARAKEET_MODEL", "mlx-community/parakeet-tdt-0.6b-v2")
 NLLB_MODEL = os.environ.get("LT_MT_MODEL", "facebook/nllb-200-distilled-600M")
@@ -183,8 +186,8 @@ PROFILES = {
         WhisperASR(KOTOBA_ASR, "ja", "transcribe"),
         NLLBTranslator(),
     ),
-    "ja-en-fast": lambda: WhisperASR(DEFAULT_ASR, "ja", "translate"),
-    "auto-en": lambda: WhisperASR(DEFAULT_ASR, None, "translate"),
+    "ja-en-fast": lambda: WhisperASR(TRANSLATE_ASR, "ja", "translate"),
+    "auto-en": lambda: WhisperASR(TRANSLATE_ASR, None, "translate"),
 }
 
 PROFILE_INFO = {
