@@ -1,7 +1,7 @@
 import time
 from pathlib import Path
 
-from pipeline import Cue, LookaheadScheduler, _needs_conversion, plan_chunks
+from pipeline import Cue, LookaheadScheduler, _needs_conversion, plan_chunks, reflow_cues
 
 
 # ------------------------------------------------------- playback formats
@@ -176,3 +176,31 @@ def test_all_cues_are_ordered():
     cues = scheduler.all_cues()
     scheduler.stop()
     assert [c.start for c in cues] == sorted(c.start for c in cues)
+
+
+# ------------------------------------------------------------------ reflow
+
+
+def test_reflow_splits_long_cue_into_two_line_pieces():
+    text = " ".join(["word"] * 40)
+    cues = reflow_cues([Cue(0.0, 9.0, text, text.upper())])
+    assert len(cues) >= 2
+    for cue in cues:
+        for side in (cue.source, cue.target):
+            assert side.count("\n") <= 1
+            assert all(len(line) <= 44 for line in side.split("\n"))
+    assert cues[0].start == 0.0
+    assert cues[-1].end == 9.0
+    for prev, nxt in zip(cues, cues[1:]):
+        assert abs(prev.end - nxt.start) < 1e-9
+
+
+def test_reflow_leaves_short_cues_alone():
+    cues = reflow_cues([Cue(0.0, 2.0, "hello world")])
+    assert [(c.start, c.end, c.source) for c in cues] == [(0.0, 2.0, "hello world")]
+
+
+def test_reflow_handles_cjk_without_spaces():
+    cues = reflow_cues([Cue(0.0, 6.0, "あ" * 100)])
+    assert len(cues) >= 2
+    assert all(len(line) <= 42 for c in cues for line in c.source.split("\n"))

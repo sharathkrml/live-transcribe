@@ -290,6 +290,106 @@ def _snap(t: float, points: list[float], tol: float) -> float:
     return best
 
 
+# --------------------------------------------------------------------------
+# subtitle reflow: one cue = max 2 lines on video
+# --------------------------------------------------------------------------
+
+SUB_LINE_CHARS = 42  # per line, incl. CJK chars
+# ponytail: 80 not 84 — halves balance at ~40, so a word on the seam can't
+# push either line past ~42 into a wrapped 3rd line.
+SUB_MAX_CHARS = 80
+
+
+def _greedy(text: str) -> list[str]:
+    """Fewest pieces of ≤ SUB_MAX_CHARS, preferring word boundaries."""
+    text = " ".join(text.split())
+    if not text:
+        return []
+    if " " not in text:  # CJK / one long word: hard cut
+        return [text[i:i + SUB_MAX_CHARS] for i in range(0, len(text), SUB_MAX_CHARS)]
+    pieces, cur_len, cur = [], 0, []
+    for w in text.split(" "):
+        while len(w) > SUB_MAX_CHARS:  # pathological word: hard cut it
+            if cur:
+                pieces.append(" ".join(cur))
+                cur, cur_len = [], 0
+            pieces.append(w[:SUB_MAX_CHARS])
+            w = w[SUB_MAX_CHARS:]
+        add = len(w) + (1 if cur else 0)
+        if cur and cur_len + add > SUB_MAX_CHARS:
+            pieces.append(" ".join(cur))
+            cur, cur_len = [w], len(w)
+        else:
+            cur.append(w)
+            cur_len += add
+    if cur:
+        pieces.append(" ".join(cur))
+    return pieces
+
+
+def _slice_like(text: str, sizes: list[int]) -> list[str]:
+    """Cut `text` into len(sizes) pieces ∝ sizes, snapping to word edges."""
+    text = " ".join(text.split())
+    total = sum(sizes)
+    if not text or not total:
+        return [""] * len(sizes)
+    bounds = []
+    pos = 0.0
+    for s in sizes[:-1]:
+        pos += s
+        bounds.append(int(round(pos / total * len(text))))
+    pieces, prev = [], 0
+    for b in bounds:
+        b = max(prev + 1, min(len(text) - 1, b)) if prev + 1 < len(text) else len(text)
+        snap = text.rfind(" ", prev + 1, b + 11)  # nearest space, slight lookahead
+        cut = snap if snap > prev else b
+        pieces.append(text[prev:cut].strip())
+        prev = cut
+    pieces.append(text[prev:].strip())
+    return pieces
+
+
+def _balance(text: str) -> str:
+    """One `\n` near the middle so the overlay renders as 2 balanced lines."""
+    if len(text) <= SUB_LINE_CHARS or "\n" in text:
+        return text
+    mid = len(text) // 2
+    spaces = [i for i, ch in enumerate(text) if ch == " "]
+    if spaces:
+        i = min(spaces, key=lambda s: (abs(s - mid), s))
+        return text[:i] + "\n" + text[i + 1:]
+    return text[:mid] + "\n" + text[mid:]
+
+
+def reflow_cues(cues: list[Cue]) -> list[Cue]:
+    """Split long cues so every cue fits 1-2 lines; time split ∝ text length."""
+    out: list[Cue] = []
+    for cue in cues:
+        src = _greedy(cue.source)
+        tgt = _greedy(cue.target) if cue.target else []
+        if len(src) <= 1 and len(tgt) <= 1:
+            cue.source = _balance(cue.source)
+            if cue.target:
+                cue.target = _balance(cue.target)
+            out.append(cue)
+            continue
+        # Boundaries follow the longer side; the shorter side is sliced ∝.
+        if len(tgt) > len(src):
+            sizes = [len(p) for p in tgt]
+            src = _slice_like(cue.source, sizes)
+        else:
+            sizes = [len(p) for p in src]
+            tgt = _slice_like(cue.target, sizes) if cue.target else [""] * len(src)
+        weights = [max(1, len(s) + len(t)) for s, t in zip(src, tgt)]
+        span, t = cue.end - cue.start, cue.start
+        total = sum(weights)
+        for i, (s, tg, w) in enumerate(zip(src, tgt, weights)):
+            end = cue.end if i == len(src) - 1 else t + span * w / total
+            out.append(Cue(t, end, _balance(s), _balance(tg)))
+            t = end
+    return out
+
+
 class AudioSource:
     """Random-access float32 mono audio."""
 
@@ -428,7 +528,7 @@ class LookaheadScheduler:
 
             t0, t1 = self.chunks[idx]
             try:
-                cues = self.run_chunk(idx, t0, t1)
+                cues = reflow_cues(self.run_chunk(idx, t0, t1))
             except Exception as exc:  # keep the worker alive; surface to the UI
                 self.warming = False
                 self.error = f"chunk {idx}: {type(exc).__name__}: {exc}"
