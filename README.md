@@ -62,9 +62,21 @@ Pick from the dropdown. Adding a pair is one entry in `PROFILES`
 | Profile | Path |
 | --- | --- |
 | `en-en` | `whisper-large-v3-turbo`, transcribe |
+| `en-en-parakeet` | `parakeet-tdt-0.6b-v2` via MLX (English-only, fast) |
 | `ja-ja` | `kotoba-whisper-v2.0-mlx`, transcribe |
 | `ja-en` | kotoba transcribes, then NLLB-600M translates |
 | `ja-en-fast` | `whisper-large-v3-turbo` built-in `task=translate` (no `--extra mt`) |
+
+More models need no code change — point at anything in the local
+Hugging Face cache (or any repo id / local snapshot dir):
+
+```sh
+# engine is inferred ("parakeet" in the name -> Parakeet, else Whisper/en)
+LT_ASR_MODELS="small=mlx-community/whisper-small-mlx,ft=./models/my-parakeet" make run
+```
+
+`LT_PARAKEET_MODEL` swaps the repo behind `en-en-parakeet`, and
+`LT_ASR_MODEL` / `LT_JA_ASR_MODEL` do the same for the Whisper profiles.
 
 Switching profiles reloads that profile's models and restarts transcription
 from the current position.
@@ -78,6 +90,8 @@ from the current position.
 | `LT_PROFILE` | `en-en` | profile to start with |
 | `LT_ASR_MODEL` | `mlx-community/whisper-large-v3-turbo` | primary ASR repo |
 | `LT_JA_ASR_MODEL` | `kaiinui/kotoba-whisper-v2.0-mlx` | Japanese ASR repo |
+| `LT_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v2` | Parakeet ASR repo |
+| `LT_ASR_MODELS` | — | extra `name=repo` profiles, comma-separated (local dirs OK) |
 | `LT_MT_MODEL` | `facebook/nllb-200-distilled-600M` | translation repo |
 | `LT_MT_DEVICE` | `cpu` | torch device for NLLB (`mps` is flaky with seq2seq) |
 | `LT_REMUX` | `1` | convert unplayable files to a browser-safe mp4 (`0` disables) |

@@ -8,17 +8,30 @@ it.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pipeline import Cue
 
 DEFAULT_ASR = os.environ.get("LT_ASR_MODEL", "mlx-community/whisper-large-v3-turbo")
 KOTOBA_ASR = os.environ.get("LT_JA_ASR_MODEL", "kaiinui/kotoba-whisper-v2.0-mlx")
+PARAKEET_ASR = os.environ.get("LT_PARAKEET_MODEL", "mlx-community/parakeet-tdt-0.6b-v2")
 NLLB_MODEL = os.environ.get("LT_MT_MODEL", "facebook/nllb-200-distilled-600M")
 
 
 def hf_token() -> str | None:
     """HF_TOKEN (or the legacy HUGGING_FACE_HUB_TOKEN)."""
     return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def resolve_model(repo_or_path: str) -> str:
+    """A local dir (e.g. an HF snapshot) is used as-is; otherwise the repo id.
+
+    Both mlx-whisper (`path_or_hf_repo`) and parakeet-mlx (`hf_id_or_path`)
+    accept either, so anything already sitting in the HF cache on this machine
+    works offline with no download.
+    """
+    p = Path(os.path.expanduser(repo_or_path))
+    return str(p) if p.is_dir() else repo_or_path
 
 
 # mlx-whisper calls huggingface_hub internally and reads the token from the
@@ -41,7 +54,7 @@ class WhisperASR:
 
         result = mlx_whisper.transcribe(
             audio,
-            path_or_hf_repo=self.model,
+            path_or_hf_repo=resolve_model(self.model),
             language=self.language,
             task=self.task,
             initial_prompt=self._prompt,
@@ -61,6 +74,37 @@ class WhisperASR:
         if cues:
             tail = " ".join(c.source for c in cues[-8:])
             self._prompt = tail[-200:]
+        return cues
+
+
+class ParakeetASR:
+    """NVIDIA Parakeet via MLX (`parakeet-mlx`). English-only, no word prompt."""
+
+    def __init__(self, model: str = PARAKEET_ASR):
+        self.model = model
+        self._m = None
+
+    def _load(self):
+        if self._m is None:
+            from parakeet_mlx import from_pretrained
+
+            self._m = from_pretrained(resolve_model(self.model))
+        return self._m
+
+    def run(self, audio, offset: float) -> list[Cue]:
+        import mlx.core as mx
+        from parakeet_mlx.audio import get_logmel
+
+        if len(audio) < 160:  # shorter than one hop: nothing to decode
+            return []
+        m = self._load()
+        mel = get_logmel(mx.array(audio, dtype=mx.float32), m.preprocessor_config)
+        result = m.generate(mel)[0]
+        cues: list[Cue] = []
+        for s in result.sentences:
+            text = (s.text or "").strip()
+            if text:
+                cues.append(Cue(offset + s.start, offset + s.end, text))
         return cues
 
 
@@ -110,7 +154,7 @@ class NLLBTranslator:
 class PassthroughStage:
     """ASR only: the source text is the displayed text."""
 
-    def __init__(self, asr: WhisperASR):
+    def __init__(self, asr: WhisperASR | ParakeetASR):
         self.asr = asr
 
     def run(self, audio, offset: float) -> list[Cue]:
@@ -133,6 +177,7 @@ class TwoStage:
 
 PROFILES = {
     "en-en": lambda: PassthroughStage(WhisperASR(DEFAULT_ASR, "en", "transcribe")),
+    "en-en-parakeet": lambda: PassthroughStage(ParakeetASR(PARAKEET_ASR)),
     "ja-ja": lambda: PassthroughStage(WhisperASR(KOTOBA_ASR, "ja", "transcribe")),
     "ja-en": lambda: TwoStage(
         WhisperASR(KOTOBA_ASR, "ja", "transcribe"),
@@ -143,10 +188,56 @@ PROFILES = {
 
 PROFILE_INFO = {
     "en-en": {"label": "English", "detail": "Whisper large-v3 turbo", "needs_mt": False},
+    "en-en-parakeet": {"label": "English (Parakeet)", "detail": "Parakeet TDT 0.6B", "needs_mt": False},
     "ja-ja": {"label": "Japanese", "detail": "Kotoba Whisper", "needs_mt": False},
     "ja-en": {"label": "Japanese → English", "detail": "Kotoba + NLLB", "needs_mt": True},
     "ja-en-fast": {"label": "Japanese → English (fast)", "detail": "Whisper built-in translate", "needs_mt": False},
 }
+
+
+def _short(repo_or_path: str) -> str:
+    return repo_or_path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def build_extra_profiles(specs: str) -> dict[str, tuple]:
+    """Parse `LT_ASR_MODELS` (`name=repo, ...`) into profile entries.
+
+    Engine is inferred: anything with "parakeet" in the repo/path gets
+    ParakeetASR, everything else WhisperASR (English transcribe). Both accept
+    HF repo ids (served from the local HF cache when present) and local
+    snapshot dirs. Built-in names are never overridden.
+    """
+    out: dict[str, tuple] = {}
+    for spec in specs.split(","):
+        spec = spec.strip()
+        if not spec or "=" not in spec:
+            continue
+        name, model = (part.strip() for part in spec.split("=", 1))
+        if not name or not model or name in PROFILES:
+            continue
+        if "parakeet" in model.lower():
+            out[name] = (
+                lambda m=model: PassthroughStage(ParakeetASR(m)),
+                {"label": f"English ({_short(model)})", "detail": _short(model),
+                 "needs_mt": False},
+            )
+        else:
+            out[name] = (
+                lambda m=model: PassthroughStage(WhisperASR(m, "en", "transcribe")),
+                {"label": f"English ({_short(model)})", "detail": _short(model),
+                 "needs_mt": False},
+            )
+    return out
+
+
+def _register_extra() -> None:
+    for name, (factory, info) in build_extra_profiles(os.environ.get("LT_ASR_MODELS", "")).items():
+        PROFILES[name] = factory
+        PROFILE_INFO[name] = info
+
+
+_register_extra()
+del _register_extra
 
 _cache: dict[str, object] = {}
 
