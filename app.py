@@ -1,0 +1,318 @@
+"""FastAPI app: file picking, media serving, look-ahead scheduling, export."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import backends
+from pipeline import LOOKAHEAD, VIDEO_EXT, LookaheadScheduler, PlaybackPrep, build_media
+
+STATIC = Path(__file__).parent / "static"
+
+app = FastAPI(title="live-transcribe")
+
+NATIVE_PICKER = sys.platform == "darwin" and shutil.which("osascript") is not None
+_PICK_LOCK = threading.Lock()
+
+_VIDEO_TYPES = "{" + ", ".join(f'"{ext.lstrip(".")}"' for ext in sorted(VIDEO_EXT)) + "}"
+
+_CHOOSE_FILE = f"""try
+    tell application "System Events" to activate
+end try
+try
+    set theFile to choose file with prompt "Choose a video to transcribe" default location (path to movies folder) of type {_VIDEO_TYPES}
+    return POSIX path of theFile
+on error number -128
+    return ""
+end try"""
+
+
+def choose_file() -> str | None:
+    """Native macOS open panel. Returns None if the user cancels."""
+    args: list[str] = ["osascript"]
+    for line in _CHOOSE_FILE.splitlines():
+        args += ["-e", line]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        raise HTTPException(500, (proc.stderr or "osascript failed").strip())
+    return proc.stdout.strip() or None
+
+
+
+class Session:
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.playback: PlaybackPrep | None = None
+        self.scheduler: LookaheadScheduler | None = None
+        self.profile: str = os.environ.get("LT_PROFILE", "en-en")
+        self.clients: set[WebSocket] = set()
+        self.loop: asyncio.AbstractEventLoop | None = None
+
+
+session = Session()
+
+
+class OpenReq(BaseModel):
+    path: str
+    profile: str | None = None
+
+
+class ProfileReq(BaseModel):
+    name: str
+
+
+class SeekReq(BaseModel):
+    time: float
+
+
+# --------------------------------------------------------------------------
+# websocket plumbing
+# --------------------------------------------------------------------------
+
+
+def _state_payload() -> dict:
+    if not session.scheduler:
+        return {}
+    payload = session.scheduler.state()
+    if session.playback:
+        payload["playback"] = session.playback.state()
+    return payload
+
+
+async def broadcast(message: dict) -> None:
+    dead = []
+    for client in list(session.clients):
+        try:
+            await client.send_json(message)
+        except Exception:
+            dead.append(client)
+    for client in dead:
+        session.clients.discard(client)
+
+
+def _on_cues(idx: int, cues: list) -> None:
+    if not session.loop or not session.clients:
+        return
+    payload = {"type": "cues", "items": [c.__dict__ for c in cues]}
+    asyncio.run_coroutine_threadsafe(broadcast(payload), session.loop)
+
+
+async def _state_pump(client: WebSocket) -> None:
+    try:
+        while True:
+            await asyncio.sleep(0.5)
+            await client.send_json({"type": "state", **_state_payload()})
+    except Exception:
+        pass
+
+
+@app.websocket("/ws")
+async def websocket(client: WebSocket) -> None:
+    await client.accept()
+    session.clients.add(client)
+    session.loop = asyncio.get_running_loop()
+    pump = asyncio.create_task(_state_pump(client))
+    try:
+        await client.send_json(
+            {
+                "type": "hello",
+                "lookahead": LOOKAHEAD,
+                "profile": session.profile,
+                "native_picker": NATIVE_PICKER,
+                "profiles": [
+                    {"name": name, **info} for name, info in backends.PROFILE_INFO.items()
+                ],
+                "open": session.path is not None,
+                "duration": session.scheduler.chunks[-1][1] if session.scheduler else 0.0,
+                "media": (
+                    {
+                        "path": str(session.path),
+                        "duration": session.scheduler.chunks[-1][1],
+                        "chunks": len(session.scheduler.chunks),
+                        "playback": session.playback.state() if session.playback else None,
+                    }
+                    if session.path and session.scheduler
+                    else None
+                ),
+            }
+        )
+        while True:
+            msg = await client.receive_json()
+            if msg.get("type") == "playhead" and session.scheduler:
+                session.scheduler.set_playhead(float(msg["time"]))
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        pump.cancel()
+        session.clients.discard(client)
+
+
+# --------------------------------------------------------------------------
+# routes
+# --------------------------------------------------------------------------
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC / "index.html")
+
+
+@app.get("/api/profiles")
+def profiles() -> list[dict]:
+    return [{"name": name, **info} for name, info in backends.PROFILE_INFO.items()]
+
+
+@app.post("/api/pick")
+def pick() -> dict:
+    """Open the native file panel. Blocks until the user chooses or cancels."""
+    if not NATIVE_PICKER:
+        raise HTTPException(501, "native file picker unavailable on this platform")
+    if not _PICK_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "a file panel is already open")
+    try:
+        return {"path": choose_file()}
+    finally:
+        _PICK_LOCK.release()
+
+
+@app.post("/api/open")
+def open_media(req: OpenReq) -> dict:
+    path = Path(os.path.expanduser(req.path)).resolve()
+    if not path.is_file():
+        raise HTTPException(404, f"not found: {path}")
+    if req.profile:
+        if req.profile not in backends.PROFILES:
+            raise HTTPException(400, f"unknown profile: {req.profile}")
+        session.profile = req.profile
+
+    _teardown()
+    # Kick the (possibly slow) conversion off first so it overlaps audio prep.
+    playback = PlaybackPrep(path)
+    playback.start()
+    source, duration, chunks = build_media(path)
+    backend = backends.get_profile(session.profile)
+
+    def run_chunk(idx: int, t0: float, t1: float):
+        return backend.run(source.slice(t0, t1), t0)
+
+    scheduler = LookaheadScheduler(chunks, run_chunk, on_cues=_on_cues)
+    session.path = path
+    session.playback = playback
+    session.scheduler = scheduler
+    scheduler.start()
+
+    return {
+        "path": str(path),
+        "duration": duration,
+        "chunks": len(chunks),
+        "profile": session.profile,
+        "lookahead": LOOKAHEAD,
+        "url": "/media",
+        "playback": playback.state(),
+    }
+
+
+@app.get("/media")
+def media() -> FileResponse:
+    playback = session.playback
+    if not playback:
+        raise HTTPException(404, "no media open")
+    if not playback.ready:
+        raise HTTPException(503, "playback is still being prepared")
+    # On conversion failure fall back to the original: it may not play, but
+    # transcription still works and the UI can say what went wrong.
+    return FileResponse(playback.output or playback.source)
+
+
+@app.get("/api/cues")
+def cues() -> dict:
+    if not session.scheduler:
+        return {"items": []}
+    return {"items": [c.__dict__ for c in session.scheduler.all_cues()]}
+
+
+@app.get("/api/state")
+def state() -> dict:
+    """Immediate snapshot so the meter isn't dead until the first WS tick."""
+    return _state_payload()
+
+
+@app.post("/api/seek")
+def seek(req: SeekReq) -> dict:
+    if session.scheduler:
+        session.scheduler.set_playhead(req.time)
+    return {"ok": True}
+
+
+@app.post("/api/profile")
+def set_profile(req: ProfileReq) -> dict:
+    try:
+        backends.get_profile(req.name)
+    except KeyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    session.profile = req.name
+    previous = session.path
+    _teardown()
+    if previous:
+        return open_media(OpenReq(path=str(previous)))
+    return {"profile": session.profile, "reopened": False}
+
+
+@app.get("/api/export")
+def export(fmt: str = "srt") -> PlainTextResponse:
+    if not session.scheduler:
+        raise HTTPException(400, "no media open")
+    items = session.scheduler.all_cues()
+    if fmt == "txt":
+        body = "\n".join(c.source if not c.target else f"{c.source}\n{c.target}" for c in items)
+        return PlainTextResponse(body, headers=_disposition("transcript.txt"))
+    if fmt == "vtt":
+        lines = ["WEBVTT", ""]
+        for i, cue in enumerate(items, 1):
+            lines += [str(i), f"{_ts(cue.start, '.')} --> {_ts(cue.end, '.')}", _text(cue), ""]
+        return PlainTextResponse("\n".join(lines), media_type="text/vtt",
+                                 headers=_disposition("transcript.vtt"))
+    lines = []
+    for i, cue in enumerate(items, 1):
+        lines += [str(i), f"{_ts(cue.start)} --> {_ts(cue.end)}", _text(cue), ""]
+    return PlainTextResponse("\n".join(lines),
+                             media_type="application/x-subrip",
+                             headers=_disposition("transcript.srt"))
+
+
+def _text(cue) -> str:
+    if cue.target and cue.target != cue.source:
+        return f"{cue.source}\n{cue.target}"
+    return cue.source or cue.target
+
+
+def _ts(t: float, sep: str = ",") -> str:
+    ms = max(0, int(round(t * 1000)))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
+
+
+def _disposition(name: str) -> dict:
+    return {"Content-Disposition": f'attachment; filename="{name}"'}
+
+
+def _teardown() -> None:
+    if session.scheduler:
+        session.scheduler.stop()
+        session.scheduler = None
+
+
+app.mount("/static", StaticFiles(directory=STATIC), name="static")

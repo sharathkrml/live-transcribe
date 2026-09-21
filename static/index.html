@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Live Transcribe</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="toolbar">
+  <div class="brand">
+    <span class="pulse" id="pulse"></span>
+    <span class="brand-name">Live Transcribe</span>
+  </div>
+
+  <div class="session" id="session" hidden>
+    <span class="file-chip" id="file-name"></span>
+    <label class="select" title="Language and model">
+      <span class="sr">Language</span>
+      <select id="profile"></select>
+    </label>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="seg" id="export" hidden role="group" aria-label="Export transcript">
+    <button type="button" data-fmt="srt" title="Export SRT">SRT</button>
+    <button type="button" data-fmt="vtt" title="Export WebVTT">VTT</button>
+    <button type="button" data-fmt="txt" title="Export plain text">TXT</button>
+  </div>
+
+  <button type="button" id="open" class="btn" hidden>Open…</button>
+  <form id="fallback" class="fallback" hidden>
+    <input id="fallback-path" type="text" spellcheck="false" placeholder="/path/to/video.mkv"
+           aria-label="Video path">
+  </form>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="frame">
+      <video id="video" controls playsinline preload="metadata"></video>
+
+      <div class="empty" id="empty">
+        <h1>Subtitles that arrive<br>before you do.</h1>
+        <p class="lede">Transcription runs ahead of playback, so the words are
+          already there when the scene reaches them.</p>
+        <p class="field-label" id="chooser-label">Language</p>
+        <div class="chooser" id="chooser" role="radiogroup" aria-labelledby="chooser-label"></div>
+        <button type="button" id="empty-open" class="btn primary large">Open Video…</button>
+        <p class="hint" id="empty-hint">Local files only · nothing leaves your Mac · ⌘O</p>
+      </div>
+
+      <div class="veil" id="veil" hidden role="status" aria-live="polite">
+        <div class="wait" aria-hidden="true"></div>
+        <p class="veil-file" id="veil-file"></p>
+        <h2 id="veil-title">Preparing</h2>
+        <ol class="steps" id="steps">
+          <li data-step="audio">Extracting audio</li>
+          <li data-step="play">Preparing playback</li>
+          <li data-step="model">Loading model</li>
+        </ol>
+        <div class="bar" id="veil-bar" hidden><i id="veil-fill"></i></div>
+        <p class="veil-hint" id="veil-hint"></p>
+      </div>
+
+      <div class="banner" id="banner" hidden role="status">
+        <span class="pulse live"></span>
+        <span id="banner-text"></span>
+      </div>
+
+      <div class="banner save" id="save" hidden>
+        <span>Subtitles ready</span>
+        <a href="/api/export?fmt=srt">SRT</a>
+        <a href="/api/export?fmt=vtt">VTT</a>
+        <a href="/api/export?fmt=txt">TXT</a>
+      </div>
+
+      <div class="overlay" id="overlay"></div>
+    </div>
+
+    <div class="meter" id="meter" role="slider" tabindex="0"
+         aria-label="Playback position" aria-valuemin="0" aria-valuenow="0" aria-valuemax="100">
+      <div class="meter-track">
+        <div class="meter-cells" id="meter-cells"></div>
+        <div class="meter-head" id="meter-head"></div>
+      </div>
+      <div class="meter-row">
+        <span class="clock" id="clock">0:00 / 0:00</span>
+        <span class="note" id="note">No video open</span>
+      </div>
+    </div>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <h2>Transcript</h2>
+      <label class="toggle">
+        <input type="checkbox" id="follow" checked>
+        <span>Follow</span>
+      </label>
+    </div>
+    <p class="panel-empty" id="panel-empty">Open a video to start.</p>
+    <ol class="transcript" id="transcript"></ol>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
