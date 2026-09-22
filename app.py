@@ -22,6 +22,16 @@ STATIC = Path(__file__).parent / "static"
 
 app = FastAPI(title="live-transcribe")
 
+
+@app.middleware("http")
+async def _no_store_static(request, call_next):
+    """Keep the browser from serving stale app.js/style.css after an edit."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 NATIVE_PICKER = sys.platform == "darwin" and shutil.which("osascript") is not None
 _PICK_LOCK = threading.Lock()
 
@@ -55,21 +65,19 @@ class Session:
         self.path: Path | None = None
         self.playback: PlaybackPrep | None = None
         self.scheduler: LookaheadScheduler | None = None
-        self.profile: str = os.environ.get("LT_PROFILE", "en-en")
         self.clients: set[WebSocket] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
 
 
 session = Session()
 
+# Bumped by every open/reset. A slow open that finishes after a reset must not
+# install its session — the user cancelled it.
+_open_gen = 0
+
 
 class OpenReq(BaseModel):
     path: str
-    profile: str | None = None
-
-
-class ProfileReq(BaseModel):
-    name: str
 
 
 class SeekReq(BaseModel):
@@ -128,13 +136,13 @@ async def websocket(client: WebSocket) -> None:
             {
                 "type": "hello",
                 "lookahead": LOOKAHEAD,
-                "profile": session.profile,
                 "native_picker": NATIVE_PICKER,
-                "profiles": [
-                    {"name": name, **info} for name, info in backends.PROFILE_INFO.items()
-                ],
                 "open": session.path is not None,
-                "duration": session.scheduler.chunks[-1][1] if session.scheduler else 0.0,
+                "duration": (
+                    session.scheduler.chunks[-1][1]
+                    if session.scheduler and session.scheduler.chunks
+                    else 0.0
+                ),
                 "media": (
                     {
                         "path": str(session.path),
@@ -168,11 +176,6 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
-@app.get("/api/profiles")
-def profiles() -> list[dict]:
-    return [{"name": name, **info} for name, info in backends.PROFILE_INFO.items()]
-
-
 @app.post("/api/pick")
 def pick() -> dict:
     """Open the native file panel. Blocks until the user chooses or cancels."""
@@ -188,20 +191,22 @@ def pick() -> dict:
 
 @app.post("/api/open")
 def open_media(req: OpenReq) -> dict:
+    global _open_gen
     path = Path(os.path.expanduser(req.path)).resolve()
     if not path.is_file():
         raise HTTPException(404, f"not found: {path}")
-    if req.profile:
-        if req.profile not in backends.PROFILES:
-            raise HTTPException(400, f"unknown profile: {req.profile}")
-        session.profile = req.profile
 
     _teardown()
+    _open_gen += 1
+    gen = _open_gen
     # Kick the (possibly slow) conversion off first so it overlaps audio prep.
     playback = PlaybackPrep(path)
     playback.start()
     source, duration, chunks = build_media(path)
-    backend = backends.get_profile(session.profile)
+    if gen != _open_gen:
+        playback.cancel()
+        raise HTTPException(409, "open cancelled")
+    backend = backends.get_backend()
 
     def run_chunk(idx: int, t0: float, t1: float):
         return backend.run(source.slice(t0, t1), t0)
@@ -216,7 +221,6 @@ def open_media(req: OpenReq) -> dict:
         "path": str(path),
         "duration": duration,
         "chunks": len(chunks),
-        "profile": session.profile,
         "lookahead": LOOKAHEAD,
         "url": "/media",
         "playback": playback.state(),
@@ -258,24 +262,12 @@ def seek(req: SeekReq) -> dict:
 @app.post("/api/reset")
 def reset() -> dict:
     """Drop the current session so the next open starts fresh."""
+    global _open_gen
+    _open_gen += 1
     _teardown()
     session.path = None
     session.playback = None
     return {"ok": True}
-
-
-@app.post("/api/profile")
-def set_profile(req: ProfileReq) -> dict:
-    try:
-        backends.get_profile(req.name)
-    except KeyError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    session.profile = req.name
-    previous = session.path
-    _teardown()
-    if previous:
-        return open_media(OpenReq(path=str(previous)))
-    return {"profile": session.profile, "reopened": False}
 
 
 @app.get("/api/export")
@@ -319,9 +311,13 @@ def _disposition(name: str) -> dict:
 
 
 def _teardown() -> None:
+    if session.playback:
+        session.playback.cancel()
+        session.playback = None
     if session.scheduler:
         session.scheduler.stop()
         session.scheduler = None
+    session.path = None
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

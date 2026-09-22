@@ -2,13 +2,12 @@ PORT ?= 8000
 LT_CACHE ?= $(HOME)/.cache/live-transcribe
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-mt run dev test check clean cache-clean
+.PHONY: help setup run dev test check clean cache-clean
 
 help:
 	@echo "live-transcribe"
 	@echo
-	@echo "  make setup       install base deps (en-en, ja-ja, ja-en-fast)"
-	@echo "  make setup-mt    install base + torch/transformers for ja-en"
+	@echo "  make setup       install deps"
 	@echo "  make run         start the server on :$(PORT)"
 	@echo "  make dev         start with auto-reload"
 	@echo "  make test        run the test suite"
@@ -21,9 +20,6 @@ help:
 
 setup:
 	uv sync
-
-setup-mt:
-	uv sync --extra mt
 
 run:
 	uv run uvicorn app:app --port $(PORT)

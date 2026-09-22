@@ -2,12 +2,28 @@ const $ = (id) => document.getElementById(id);
 
 const el = {
   video: $("video"),
+  frame: $("frame"),
+  stage: document.querySelector(".stage"),
+  controls: $("controls"),
+  play: $("play"),
+  back10: $("back10"),
+  fwd10: $("fwd10"),
+  mute: $("mute"),
+  volume: $("volume"),
+  ctlTime: $("ctl-time"),
+  speed: $("speed"),
+  speedMenu: $("speed-menu"),
+  captions: $("captions"),
+  pip: $("pip"),
+  fullscreen: $("fullscreen"),
+  cancel: $("cancel"),
+  help: $("help"),
+  helpClose: $("help-close"),
+  copyAll: $("copy-all"),
   overlay: $("overlay"),
   pulse: $("pulse"),
   fileName: $("file-name"),
   session: $("session"),
-  profile: $("profile"),
-  chooser: $("chooser"),
   transcript: $("transcript"),
   panelEmpty: $("panel-empty"),
   follow: $("follow"),
@@ -59,15 +75,26 @@ const S = {
   warming: false,
   videoReady: false,
   playback: null,
+  captions: true,
+  speed: 1,
+  helpOpen: false,
+  retry: 0,
+  gen: 0,
 };
+
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+let hideTimer = 0;
 
 // ------------------------------------------------------------- transport
 
 function connect() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
   S.ws = ws;
 
   ws.onopen = () => {
+    S.retry = 0;
     if (S.hasMedia) sendPlayhead(true);
   };
 
@@ -75,7 +102,6 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "hello") {
       S.lookahead = msg.lookahead;
-      if (msg.profiles) fillProfiles(msg.profiles, msg.profile);
       if (!msg.native_picker) showFallback();
       if (msg.media) restore(msg.media);
     } else if (msg.type === "cues") {
@@ -87,7 +113,8 @@ function connect() {
 
   ws.onclose = () => {
     setStatus("Disconnected — reconnecting…");
-    setTimeout(connect, 1000);
+    S.retry += 1;
+    setTimeout(connect, Math.min(8000, 500 * S.retry));
   };
 }
 
@@ -108,8 +135,11 @@ function addCues(items) {
     const key = cue.start.toFixed(2);
     if (S.keys.has(key)) continue;
     S.keys.add(key);
-    S.cues.push({ ...cue, key });
-    fresh.push(cue);
+    // Keep the key on the same object the row renders from, or the row's
+    // dataset/S.rows entry is keyed by `undefined` and highlighting dies.
+    const keyed = { ...cue, key };
+    S.cues.push(keyed);
+    fresh.push(keyed);
   }
   if (!fresh.length) return;
   S.cues.sort((a, b) => a.start - b.start);
@@ -124,9 +154,28 @@ function addCues(items) {
   if (!S.warming) hideBanner();
 }
 
+function cueText(cue) {
+  return !cue.target || cue.target === cue.source
+    ? cue.source
+    : `${cue.source}\n${cue.target}`;
+}
+
+function flashCopied(btn) {
+  const label = btn.textContent;
+  btn.textContent = "Copied";
+  btn.classList.add("done");
+  setTimeout(() => {
+    btn.textContent = label;
+    btn.classList.remove("done");
+  }, 1200);
+}
+
 function row(cue) {
   const li = document.createElement("li");
   li.dataset.key = cue.key;
+  li.tabIndex = 0;
+  li.setAttribute("role", "button");
+  li.setAttribute("aria-label", `Seek to ${clock(cue.start)}`);
 
   const time = document.createElement("span");
   time.className = "t";
@@ -145,8 +194,33 @@ function row(cue) {
     body.appendChild(tgt);
   }
 
-  li.append(time, body);
-  li.onclick = () => seekTo(cue.start + 0.01);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "copy";
+  copy.textContent = "Copy";
+  copy.title = "Copy line";
+  copy.setAttribute("aria-label", "Copy line");
+  copy.onclick = (event) => {
+    event.stopPropagation();
+    navigator.clipboard.writeText(cueText(cue)).then(
+      () => flashCopied(copy),
+      () => {}
+    );
+  };
+
+  li.append(time, body, copy);
+  // A clean click seeks; a click that ends a text selection must not.
+  li.addEventListener("click", () => {
+    if (window.getSelection().toString().trim()) return;
+    seekTo(cue.start + 0.01);
+  });
+  li.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      seekTo(cue.start + 0.01);
+    }
+  });
   S.rows.set(cue.key, li);
   return li;
 }
@@ -211,6 +285,7 @@ function paintHead(t) {
   el.meter.setAttribute("aria-valuenow", Math.round(pct));
   el.meter.setAttribute("aria-valuetext", clock(t));
   el.clock.textContent = `${clock(t)} / ${clock(d)}`;
+  el.ctlTime.textContent = `${clock(t)} / ${clock(d)}`;
 }
 
 // ----------------------------------------------------------------- meter
@@ -243,27 +318,20 @@ const endDrag = (event) => {
 el.meter.addEventListener("pointerup", endDrag);
 el.meter.addEventListener("pointercancel", endDrag);
 
-el.meter.addEventListener("keydown", (event) => {
-  if (!S.duration) return;
-  const step = event.shiftKey ? 30 : 5;
-  const map = { ArrowLeft: -step, ArrowRight: step };
-  if (event.key === "Home") seekTo(0);
-  else if (event.key === "End") seekTo(S.duration);
-  else if (map[event.key]) seekTo(el.video.currentTime + map[event.key]);
-  else return;
-  event.preventDefault();
-});
-
 // ------------------------------------------------------------- rendering
 
 function tick() {
   const t = el.video.currentTime;
   const idx = findCue(t);
-  if (idx >= 0) {
+  if (idx >= 0 && S.captions) {
     S.hint = idx;
     const cue = S.cues[idx];
     el.overlay.textContent = cue.target || cue.source;
     el.overlay.classList.add("show");
+    setActive(cue.key);
+  } else if (idx >= 0) {
+    S.hint = idx;
+    el.overlay.classList.remove("show");
     setActive(cue.key);
   } else {
     el.overlay.classList.remove("show");
@@ -367,57 +435,12 @@ function clock(t) {
   return `${h ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
-function currentLabel() {
-  const opt = el.profile.selectedOptions[0];
-  return (opt && opt.textContent) || "model";
-}
-
-function selectedProfile() {
-  const checked = el.chooser.querySelector("input:checked");
-  return (checked && checked.value) || el.profile.value;
-}
-
-function syncChooser(name) {
-  if (!name) return;
-  el.profile.value = name;
-  const radio = el.chooser.querySelector(`input[value="${CSS.escape(name)}"]`);
-  if (radio) radio.checked = true;
-}
-
-function fillProfiles(profiles, current) {
-  if (!el.profile.options.length) {
-    for (const p of profiles) {
-      const opt = document.createElement("option");
-      opt.value = p.name;
-      opt.textContent = p.label;
-      el.profile.appendChild(opt);
-    }
-  }
-  if (!el.chooser.children.length) {
-    for (const p of profiles) {
-      const lab = document.createElement("label");
-      lab.className = "choice";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "profile-pick";
-      radio.value = p.name;
-      const name = document.createElement("span");
-      name.className = "choice-label";
-      name.textContent = p.label;
-      const detail = document.createElement("span");
-      detail.className = "choice-detail";
-      detail.textContent = p.detail || "";
-      lab.append(radio, name, detail);
-      el.chooser.appendChild(lab);
-    }
-    el.chooser.addEventListener("change", () => syncChooser(selectedProfile()));
-  }
-  syncChooser(current);
-}
-
-function showVeil({ title, file, hint, steps, bar } = {}) {
+function showVeil({ title, file, hint, steps, bar, cancel } = {}) {
   el.empty.hidden = true;
   el.veil.hidden = false;
+  el.controls.hidden = true;
+  el.frame.classList.remove("controls-on");
+  el.cancel.hidden = !cancel;
   el.veilTitle.textContent = title || "Preparing";
   el.veilFile.textContent = file || "";
   el.veilFile.hidden = !file;
@@ -439,6 +462,7 @@ function showVeil({ title, file, hint, steps, bar } = {}) {
 
 function hideVeil() {
   el.veil.hidden = true;
+  el.controls.hidden = !S.hasMedia;
   if (!S.hasMedia) el.empty.hidden = false;
 }
 
@@ -482,25 +506,13 @@ function paintPhase() {
     showVeil({
       title: "Opening",
       file,
-      hint: "Extracting audio and planning chunks…",
+      hint: "Extracting audio and planning chunks… (Esc to cancel)",
       steps: { audio: "active", play: "", model: "" },
+      cancel: true,
     });
     el.note.textContent = "Opening…";
     el.panelEmpty.hidden = false;
     el.panelEmpty.textContent = "Extracting audio…";
-    return;
-  }
-
-  if (S.phase === "switching") {
-    showVeil({
-      title: `Switching to ${currentLabel()}`,
-      file,
-      hint: "Reloading models and restarting transcription…",
-      steps: { audio: "done", play: "done", model: "active" },
-    });
-    el.note.textContent = "Switching model…";
-    el.panelEmpty.hidden = false;
-    el.panelEmpty.textContent = "Reloading model…";
     return;
   }
 
@@ -510,9 +522,10 @@ function paintPhase() {
     showVeil({
       title: "Preparing playback",
       file,
-      hint: `Converting ${why} so the browser can play it… ${pct}%`,
+      hint: `Converting ${why} so the browser can play it… ${pct}% (Esc to cancel)`,
       steps: { audio: "done", play: "active", model: S.warming ? "active" : "" },
       bar: S.playback.progress || 0,
+      cancel: true,
     });
     el.note.textContent = `Converting… ${pct}%`;
     el.panelEmpty.hidden = false;
@@ -524,7 +537,7 @@ function paintPhase() {
     showVeil({
       title: "Loading video",
       file,
-      hint: S.warming ? `Loading ${currentLabel()} in the background…` : "",
+      hint: S.warming ? "Loading Auto → English (first run downloads ~3 GB)…" : "",
       steps: { audio: "done", play: "active", model: S.warming ? "active" : "" },
     });
     el.note.textContent = "Loading video…";
@@ -534,7 +547,7 @@ function paintPhase() {
   hideVeil();
 
   if (S.hasMedia && S.warming) {
-    showBanner(`Loading ${currentLabel()}… first run may download the model`);
+    showBanner("Loading Auto → English… first run downloads ~3 GB");
     if (!S.cues.length) {
       el.panelEmpty.hidden = false;
       el.panelEmpty.textContent = "Model is loading…";
@@ -548,6 +561,108 @@ function paintPhase() {
         : "Open a video to start.";
     }
   }
+}
+
+// -------------------------------------------------------------- transport
+
+function showControls() {
+  if (!S.hasMedia) return;
+  el.frame.classList.add("controls-on");
+  clearTimeout(hideTimer);
+  if (!el.video.paused) {
+    hideTimer = setTimeout(() => el.frame.classList.remove("controls-on"), 2600);
+  }
+}
+
+function hideControls() {
+  clearTimeout(hideTimer);
+  if (!el.video.paused) el.frame.classList.remove("controls-on");
+}
+
+function syncVolume() {
+  const muted = el.video.muted || el.video.volume === 0;
+  el.mute.classList.toggle("muted", muted);
+  const level = el.video.muted ? 0 : el.video.volume;
+  el.volume.value = String(level);
+  el.volume.setAttribute("aria-valuetext", `${Math.round(level * 100)}%`);
+}
+
+function setVolume(v) {
+  el.video.muted = false;
+  el.video.volume = clamp01(Number(v));
+  syncVolume();
+}
+
+function toggleMute() {
+  el.video.muted = !el.video.muted;
+  if (!el.video.muted && el.video.volume === 0) el.video.volume = 0.5;
+  syncVolume();
+}
+
+function setSpeed(rate) {
+  S.speed = rate;
+  el.video.playbackRate = rate;
+  el.speed.textContent = `${rate}×`;
+  for (const item of el.speedMenu.children) {
+    item.setAttribute("aria-checked", String(Number(item.dataset.speed) === rate));
+  }
+}
+
+function stepSpeed(dir) {
+  const i = SPEEDS.indexOf(S.speed);
+  const j = Math.min(SPEEDS.length - 1, Math.max(0, (i < 0 ? 2 : i) + dir));
+  if (j !== i) setSpeed(SPEEDS[j]);
+}
+
+function openSpeedMenu() {
+  el.speedMenu.hidden = false;
+  el.speed.setAttribute("aria-expanded", "true");
+}
+
+function closeSpeedMenu() {
+  el.speedMenu.hidden = true;
+  el.speed.setAttribute("aria-expanded", "false");
+}
+
+function toggleCaptions() {
+  S.captions = !S.captions;
+  el.captions.setAttribute("aria-pressed", String(S.captions));
+  if (!S.captions) el.overlay.classList.remove("show");
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await el.stage.requestFullscreen();
+  } catch {}
+}
+
+async function togglePiP() {
+  try {
+    if (document.pictureInPictureElement) await document.exitPictureInPicture();
+    else if (el.video.requestPictureInPicture) await el.video.requestPictureInPicture();
+  } catch {}
+}
+
+function openHelp() {
+  S.helpOpen = true;
+  el.help.hidden = false;
+  el.helpClose.focus();
+}
+
+function closeHelp() {
+  S.helpOpen = false;
+  el.help.hidden = true;
+}
+
+async function cancelOpen() {
+  if (S.busy) return;
+  S.gen += 1; // any open still in flight must not install its result
+  try {
+    await fetch("/api/reset", { method: "POST" });
+  } catch {}
+  resetSession();
+  setStatus("Cancelled");
 }
 
 // ------------------------------------------------------------------ open
@@ -589,6 +704,7 @@ async function pick() {
 
 async function open(path) {
   if (!path) return;
+  const gen = ++S.gen;
   S.phase = "opening";
   el.fileName.textContent = path.split("/").pop();
   el.fileName.title = path;
@@ -599,19 +715,22 @@ async function open(path) {
     const res = await fetch("/api/open", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, profile: selectedProfile() }),
+      body: JSON.stringify({ path }),
     });
     if (!res.ok) throw new Error(await res.text());
     const info = await res.json();
-    if (info.profile) syncChooser(info.profile);
+    if (gen !== S.gen) return; // cancelled or superseded while opening
     applyMedia(path, info, `/media?t=${Date.now()}`);
   } catch (err) {
+    if (gen !== S.gen) return;
     S.phase = S.hasMedia ? "playing" : "idle";
     setStatus(String(err.message || err), true);
     paintPhase();
   } finally {
-    el.open.disabled = false;
-    el.emptyOpen.disabled = false;
+    if (gen === S.gen) {
+      el.open.disabled = false;
+      el.emptyOpen.disabled = false;
+    }
   }
 }
 
@@ -632,6 +751,8 @@ function resetSession() {
   el.video.pause();
   el.video.removeAttribute("src");
   el.video.load();
+  el.frame.classList.remove("controls-on");
+  el.controls.hidden = true;
   el.session.hidden = true;
   el.reset.hidden = true;
   el.open.hidden = true;
@@ -641,6 +762,7 @@ function resetSession() {
 
 async function resetAndPick() {
   if (S.busy) return;
+  S.gen += 1;
   try {
     await fetch("/api/reset", { method: "POST" });
   } catch {}
@@ -695,6 +817,7 @@ function attachVideo(url, info) {
       (info.playback && info.playback.converted ? " · converted for playback" : "")
   );
   paintPhase();
+  showControls();
 }
 
 // ----------------------------------------------------------------- wiring
@@ -707,38 +830,83 @@ el.fallback.onsubmit = (event) => {
   open(el.fallbackPath.value.trim());
 };
 
-el.profile.onchange = async () => {
-  syncChooser(el.profile.value);
-  if (!S.hasMedia) return;
-  const label = currentLabel();
-  S.phase = "switching";
-  S.videoReady = false;
-  S.warming = true;
-  paintPhase();
-  try {
-    const res = await fetch("/api/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: el.profile.value }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const info = await res.json();
-    if (info.duration != null) {
-      applyMedia(info.path, info, `/media?t=${Date.now()}`);
-    } else {
-      S.phase = "playing";
-      paintPhase();
-    }
-  } catch (err) {
-    S.phase = S.hasMedia ? "playing" : "idle";
-    setStatus(String(err.message || err), true);
-    paintPhase();
-  }
-};
-
 for (const btn of document.querySelectorAll(".seg button")) {
   btn.onclick = () => (location.href = `/api/export?fmt=${btn.dataset.fmt}`);
 }
+
+// -- transport controls ----------------------------------------------------
+
+for (const rate of SPEEDS) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.setAttribute("role", "menuitemradio");
+  item.dataset.speed = String(rate);
+  item.textContent = `${rate}×`;
+  item.onclick = () => {
+    setSpeed(rate);
+    closeSpeedMenu();
+  };
+  el.speedMenu.appendChild(item);
+}
+
+el.play.onclick = () => (el.video.paused ? el.video.play() : el.video.pause());
+el.back10.onclick = () => seekTo(el.video.currentTime - 10);
+el.fwd10.onclick = () => seekTo(el.video.currentTime + 10);
+el.mute.onclick = toggleMute;
+el.volume.oninput = () => setVolume(el.volume.value);
+el.captions.onclick = toggleCaptions;
+el.pip.onclick = togglePiP;
+el.fullscreen.onclick = toggleFullscreen;
+el.cancel.onclick = cancelOpen;
+el.helpClose.onclick = closeHelp;
+el.speed.onclick = (event) => {
+  event.stopPropagation();
+  el.speedMenu.hidden ? openSpeedMenu() : closeSpeedMenu();
+};
+el.help.addEventListener("click", (event) => {
+  if (event.target === el.help) closeHelp();
+});
+document.addEventListener("click", closeSpeedMenu);
+el.copyAll.onclick = async () => {
+  try {
+    const res = await fetch("/api/export?fmt=txt");
+    await navigator.clipboard.writeText(await res.text());
+    flashCopied(el.copyAll);
+  } catch {}
+};
+
+el.frame.addEventListener("mousemove", showControls);
+el.frame.addEventListener("mouseleave", hideControls);
+
+el.video.addEventListener("click", () => {
+  if (!S.hasMedia || !el.video.src) return;
+  el.video.paused ? el.video.play() : el.video.pause();
+});
+el.video.addEventListener("dblclick", () => {
+  if (S.hasMedia && el.video.src) toggleFullscreen();
+});
+if (!document.pictureInPictureEnabled) el.pip.hidden = true;
+
+el.video.addEventListener("play", () => {
+  el.play.classList.add("playing");
+  el.play.setAttribute("aria-label", "Pause");
+  showControls();
+});
+el.video.addEventListener("pause", () => {
+  el.play.classList.remove("playing");
+  el.play.setAttribute("aria-label", "Play");
+  showControls();
+});
+
+document.addEventListener("fullscreenchange", () => {
+  const on = !!document.fullscreenElement;
+  el.fullscreen.setAttribute("aria-label", on ? "Exit fullscreen" : "Fullscreen");
+  el.fullscreen.title = on ? "Exit fullscreen (F)" : "Fullscreen (F)";
+  if (on) showControls();
+});
+
+syncVolume();
+setSpeed(S.speed);
 
 el.video.addEventListener("loadedmetadata", () => {
   if (el.video.duration && isFinite(el.video.duration)) S.duration = el.video.duration;
@@ -771,18 +939,117 @@ el.video.addEventListener("error", () => {
   paintPhase();
 });
 
+// One router for every shortcut. Typing fields keep their keys; buttons keep
+// Space and Enter. Everything else plays nicely with the player.
 document.addEventListener("keydown", (event) => {
-  const tag = (document.activeElement || {}).tagName || "";
-  const typing = /INPUT|TEXTAREA|SELECT/.test(tag);
+  const active = document.activeElement;
+  const tag = (active && active.tagName) || "";
+  const typing = /INPUT|TEXTAREA|SELECT/.test(tag) || !!(active && active.isContentEditable);
+  const key = event.key;
+  const lower = key.toLowerCase();
 
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o") {
+  if ((event.metaKey || event.ctrlKey) && lower === "o") {
     event.preventDefault();
     pick();
     return;
   }
-  if (event.code === "Space" && S.hasMedia && el.video.src && !typing && tag !== "BUTTON") {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+  if (key === "?" && !typing) {
+    event.preventDefault();
+    S.helpOpen ? closeHelp() : openHelp();
+    return;
+  }
+  if (key === "Escape") {
+    if (S.helpOpen) return closeHelp();
+    if (!el.speedMenu.hidden) return closeSpeedMenu();
+    if (typing) return;
+    if (document.fullscreenElement) return;
+    if (S.phase === "opening" || (S.pendingVideo && S.playback && !S.playback.ready && !S.playback.error)) {
+      event.preventDefault();
+      cancelOpen();
+    }
+    return;
+  }
+  if (typing) return;
+
+  if (key === " " || lower === "k") {
+    if (/BUTTON|A/.test(tag) || !S.hasMedia || !el.video.src) return;
     event.preventDefault();
     el.video.paused ? el.video.play() : el.video.pause();
+    return;
+  }
+  if (!S.hasMedia || !el.video.src) return;
+
+  const step = event.shiftKey ? 30 : 5;
+  switch (key) {
+    case "ArrowLeft":
+      event.preventDefault();
+      seekTo(el.video.currentTime - step);
+      break;
+    case "ArrowRight":
+      event.preventDefault();
+      seekTo(el.video.currentTime + step);
+      break;
+    case "ArrowUp":
+      event.preventDefault();
+      setVolume(el.video.muted ? 0.05 : el.video.volume + 0.05);
+      break;
+    case "ArrowDown":
+      event.preventDefault();
+      setVolume(el.video.volume - 0.05);
+      break;
+    case "Home":
+      event.preventDefault();
+      seekTo(0);
+      break;
+    case "End":
+      event.preventDefault();
+      seekTo(S.duration);
+      break;
+    case ",":
+      if (el.video.paused) {
+        event.preventDefault();
+        seekTo(el.video.currentTime - 1 / 30);
+      }
+      break;
+    case ".":
+      if (el.video.paused) {
+        event.preventDefault();
+        seekTo(el.video.currentTime + 1 / 30);
+      }
+      break;
+    case "<":
+      event.preventDefault();
+      stepSpeed(-1);
+      break;
+    case ">":
+      event.preventDefault();
+      stepSpeed(1);
+      break;
+    default:
+      if (lower === "j") {
+        event.preventDefault();
+        seekTo(el.video.currentTime - 10);
+      } else if (lower === "l") {
+        event.preventDefault();
+        seekTo(el.video.currentTime + 10);
+      } else if (lower === "m") {
+        event.preventDefault();
+        toggleMute();
+      } else if (lower === "f") {
+        event.preventDefault();
+        toggleFullscreen();
+      } else if (lower === "c") {
+        event.preventDefault();
+        toggleCaptions();
+      } else if (lower === "p") {
+        event.preventDefault();
+        togglePiP();
+      } else if (/^[0-9]$/.test(key)) {
+        event.preventDefault();
+        seekTo((Number(key) / 10) * S.duration);
+      }
   }
 });
 
