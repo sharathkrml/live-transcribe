@@ -1,1 +1,0 @@
-I wanna build a live transcription app for mac it should be able to play video , and take 10 sec in advance and transcribe that part realtime(like buffering) on my mac silicon , it should sipport japanese to english ,english to english for now ( it can be expandable easily by choosing models)

@@ -135,8 +135,11 @@ function addCues(items) {
     const key = cue.start.toFixed(2);
     if (S.keys.has(key)) continue;
     S.keys.add(key);
-    S.cues.push({ ...cue, key });
-    fresh.push(cue);
+    // Keep the key on the same object the row renders from, or the row's
+    // dataset/S.rows entry is keyed by `undefined` and highlighting dies.
+    const keyed = { ...cue, key };
+    S.cues.push(keyed);
+    fresh.push(keyed);
   }
   if (!fresh.length) return;
   S.cues.sort((a, b) => a.start - b.start);
@@ -214,6 +217,7 @@ function row(cue) {
   li.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
+      event.stopPropagation();
       seekTo(cue.start + 0.01);
     }
   });
@@ -951,7 +955,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
-  if (key === "?") {
+  if (key === "?" && !typing) {
     event.preventDefault();
     S.helpOpen ? closeHelp() : openHelp();
     return;
@@ -959,6 +963,7 @@ document.addEventListener("keydown", (event) => {
   if (key === "Escape") {
     if (S.helpOpen) return closeHelp();
     if (!el.speedMenu.hidden) return closeSpeedMenu();
+    if (typing) return;
     if (document.fullscreenElement) return;
     if (S.phase === "opening" || (S.pendingVideo && S.playback && !S.playback.ready && !S.playback.error)) {
       event.preventDefault();

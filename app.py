@@ -138,7 +138,11 @@ async def websocket(client: WebSocket) -> None:
                 "lookahead": LOOKAHEAD,
                 "native_picker": NATIVE_PICKER,
                 "open": session.path is not None,
-                "duration": session.scheduler.chunks[-1][1] if session.scheduler else 0.0,
+                "duration": (
+                    session.scheduler.chunks[-1][1]
+                    if session.scheduler and session.scheduler.chunks
+                    else 0.0
+                ),
                 "media": (
                     {
                         "path": str(session.path),
@@ -309,9 +313,11 @@ def _disposition(name: str) -> dict:
 def _teardown() -> None:
     if session.playback:
         session.playback.cancel()
+        session.playback = None
     if session.scheduler:
         session.scheduler.stop()
         session.scheduler = None
+    session.path = None
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
