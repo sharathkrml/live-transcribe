@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+brag-output*/
+.agents/
+.claude/
+agent/
+.hyperframes/
