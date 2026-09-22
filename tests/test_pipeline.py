@@ -5,6 +5,7 @@ from pipeline import (
     Cue,
     LookaheadScheduler,
     PlaybackPrep,
+    _convert_args,
     _needs_conversion,
     plan_chunks,
     reflow_cues,
@@ -34,6 +35,15 @@ def test_unplayable_codecs_are_detected():
 def test_unplayable_containers_are_detected():
     assert _needs_conversion(Path("clip.mkv"), {"video": "h264", "audio": "aac"}) == "container"
     assert _needs_conversion(Path("clip.avi"), {"video": "h264", "audio": "mp3"}) == "container"
+
+
+def test_reencode_sets_a_short_keyframe_interval(monkeypatch):
+    out = Path("out.mp4")
+    monkeypatch.setattr("pipeline._video_encoder", lambda: "libx264")
+    reencoded = _convert_args(Path("clip.mkv"), out, {"video": "hevc", "audio": "aac"})
+    assert "-g" in reencoded, "a long GOP makes every seek stall on decode"
+    copied = _convert_args(Path("clip.mp4"), out, {"video": "h264", "audio": "aac"})
+    assert "-g" not in copied, "copy must not touch the source GOP"
 
 
 # -------------------------------------------------------------- cancelling
@@ -136,7 +146,7 @@ def test_fills_to_end():
     assert log == [0, 1, 2, 3]
 
 
-def test_seek_jumps_the_queue():
+def test_seek_scans_forward_before_backfilling_behind():
     log = []
     hold = True
 
@@ -149,12 +159,16 @@ def test_seek_jumps_the_queue():
     scheduler = LookaheadScheduler(make_chunks(10), run_chunk, poll=0.01)
     scheduler.start()
     assert wait_until(lambda: 0 in log)
-    scheduler.set_playhead(95.0)
+    scheduler.set_playhead(95.0)  # jump to chunk 3
     hold = False
-    assert wait_until(lambda: 3 in log)
+    assert wait_until(lambda: scheduler.state()["finished"])
     scheduler.stop()
     assert log[0] == 0
-    assert log.index(3) < log.index(1)
+    assert log[log.index(3):log.index(9) + 1] == list(range(3, 10)), \
+        "the seek target must stream to the end first"
+    assert log.index(1) > log.index(9), "chunks behind are back-filled last"
+    assert log.index(2) > log.index(9)
+    assert sorted(log) == list(range(10))
 
 
 def test_seek_back_serves_from_cache():
@@ -163,7 +177,7 @@ def test_seek_back_serves_from_cache():
     scheduler.start()
     assert wait_until(lambda: 0 in log)
     scheduler.set_playhead(95.0)
-    assert wait_until(lambda: scheduler.state()["finished"])
+    assert wait_until(lambda: scheduler.state()["chunks_done"] >= 2)
     scheduler.set_playhead(5.0)
     time.sleep(0.05)
     scheduler.stop()

@@ -6,7 +6,7 @@
 
 Play a local video — the words are already on screen when the scene reaches them.
 
-[![platform](https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple)](https://github.com/sharathkrml/live-transcribe)
+[![platform](https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple)](https://github.com/sharathkrml/overhear-subs)
 [![python](https://img.shields.io/badge/python-3.12-blue?logo=python)](pyproject.toml)
 [![offline](https://img.shields.io/badge/network-one--time%20model%20download-success)](#quickstart)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -113,9 +113,15 @@ Drag the timeline to scrub — it doubles as a pipeline meter, one cell per chun
 | --- | --- | --- |
 | `HF_TOKEN` | — | Hugging Face token (also `HUGGING_FACE_HUB_TOKEN`) |
 | `LT_LOOKAHEAD` | `10.0` | seconds of transcript kept ahead of the playhead |
+| `LT_CHUNK` | `30.0` | chunk length in seconds; shorter means a seek waits less for captions |
 | `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | ASR repo (must be translate-capable) |
 | `LT_REMUX` | `1` | convert unplayable files to browser-safe mp4 (`0` disables) |
 | `LT_CACHE` | `~/.cache/overhear-subs` | derived PCM + remuxed mp4 |
+| `PORT` | `8000` | server port (`make run` / `make dev`) |
+
+Set them inline, or copy `.env.example` to `.env` — the Makefile includes it and
+exports whatever's set, so `make run`, `make dev`, and `make test` all see it.
+Only `make` loads `.env`; running `uvicorn` directly won't (use `uvicorn --env-file .env`).
 
 ```sh
 HF_TOKEN=hf_xxx LT_LOOKAHEAD=15 make run
@@ -127,7 +133,7 @@ HF_TOKEN=hf_xxx LT_LOOKAHEAD=15 make run
 
 ## Limits (the honest part)
 
-- **Buffer overshoots up to one chunk (30s)** — guarantees *at least* `LT_LOOKAHEAD` seconds ahead.
+- **Buffer overshoots up to one chunk** (`LT_CHUNK`, default 30s) — guarantees *at least* `LT_LOOKAHEAD` seconds ahead.
 - **One video at a time.** `/media` serves the current file; opening another cancels what's in flight.
 - **Cached conversions are re-probed** — a stale cache is discarded, not served.
 - **File panel uses `osascript`** (`app.py:choose_file`). macOS may ask once to control System Events (only to bring the panel forward); denied = panel may open behind the browser. Non-macOS falls back to a path field.

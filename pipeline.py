@@ -22,8 +22,10 @@ import numpy as np
 SAMPLE_RATE = 16000
 CACHE_DIR = Path(os.environ.get("LT_CACHE", Path.home() / ".cache" / "overhear-subs"))
 
-CHUNK_TARGET = 30.0  # whisper's native window
-CHUNK_MAX = 30.0
+# Shorter chunks mean a seek waits less for the in-flight chunk to clear;
+# whisper's native window is 30s. Tunable via LT_CHUNK.
+CHUNK_TARGET = float(os.environ.get("LT_CHUNK", "30.0"))
+CHUNK_MAX = CHUNK_TARGET
 SILENCE_SNAP = 6.0  # how far a boundary may drift to land on a silence
 LOOKAHEAD = float(os.environ.get("LT_LOOKAHEAD", "10.0"))
 
@@ -238,9 +240,11 @@ def _convert_args(video: Path, out: Path, codecs: dict[str, str]) -> list[str]:
     elif _video_encoder() == "h264_videotoolbox":
         # ponytail: bitrate-capped hardware encode, no quality tuning.
         # Swap to libx264 -crf if a file comes out visibly soft.
-        args += ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+        # -g 48: a short GOP so scrubbing only decodes ~2s back to a keyframe.
+        args += ["-c:v", "h264_videotoolbox", "-b:v", "8M", "-g", "48"]
     else:
-        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                 "-g", "48", "-keyint_min", "48", "-sc_threshold", "0"]
     audio = codecs.get("audio")
     if audio is None:
         pass
@@ -436,11 +440,12 @@ def build_media(video: Path) -> tuple[AudioSource, float, list[tuple[float, floa
 
 
 class LookaheadScheduler:
-    """Fills the transcript to the end, like a progressive download.
+    """Transcribes forward from the playhead, then back-fills behind it.
 
-    The playhead window (`playhead + lookahead`) is always next in the queue
-    so playback never waits; remaining chunks fill in afterwards. Results are
-    cached by chunk index, so seeking backwards re-serves instantly.
+    A seek moves `next_idx` to the target, so transcription resumes there and
+    runs to the end before sweeping up chunks skipped over (e.g. seek to 10:00:
+    do 10:00→finish, then 0:00→10:00). Results are cached by chunk index, so a
+    backward seek re-serves them instantly.
     """
 
     def __init__(
@@ -524,12 +529,17 @@ class LookaheadScheduler:
         return self.chunks[j - 1][1] if j > idx else self.chunks[idx][0]
 
     def _pick(self) -> int | None:
+        """Next chunk to run: forward from the playhead, then anything behind.
+
+        Forward first so a seek's target streams immediately; only once there's
+        nothing left ahead do we sweep up chunks skipped by earlier seeks.
+        """
         with self._lock:
             idx = self.next_idx
             while idx < len(self.chunks) and idx in self.cache:
                 idx += 1
             self.next_idx = idx
-            if idx < len(self.chunks) and self.chunks[idx][0] <= self.playhead + self.lookahead:
+            if idx < len(self.chunks):
                 return idx
             for i, _ in enumerate(self.chunks):
                 if i not in self.cache:
