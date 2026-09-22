@@ -6,7 +6,7 @@
 
 Play a local video — the words are already on screen when the scene reaches them.
 
-[![platform](https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple)](https://github.com/sharathkrml/live-transcribe)
+[![platform](https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple)](https://github.com/sharathkrml/overhear-subs)
 [![python](https://img.shields.io/badge/python-3.12-blue?logo=python)](pyproject.toml)
 [![offline](https://img.shields.io/badge/network-one--time%20model%20download-success)](#quickstart)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
