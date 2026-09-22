@@ -1,6 +1,6 @@
 <div align="center">
 
-# live-transcribe
+# overhear-subs
 
 **Subtitles that pull up before you do.**
 
@@ -115,7 +115,7 @@ Drag the timeline to scrub — it doubles as a pipeline meter, one cell per chun
 | `LT_LOOKAHEAD` | `10.0` | seconds of transcript kept ahead of the playhead |
 | `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | ASR repo (must be translate-capable) |
 | `LT_REMUX` | `1` | convert unplayable files to browser-safe mp4 (`0` disables) |
-| `LT_CACHE` | `~/.cache/live-transcribe` | derived PCM + remuxed mp4 |
+| `LT_CACHE` | `~/.cache/overhear-subs` | derived PCM + remuxed mp4 |
 
 ```sh
 HF_TOKEN=hf_xxx LT_LOOKAHEAD=15 make run

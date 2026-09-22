@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 SAMPLE_RATE = 16000
-CACHE_DIR = Path(os.environ.get("LT_CACHE", Path.home() / ".cache" / "live-transcribe"))
+CACHE_DIR = Path(os.environ.get("LT_CACHE", Path.home() / ".cache" / "overhear-subs"))
 
 CHUNK_TARGET = 30.0  # whisper's native window
 CHUNK_MAX = 30.0

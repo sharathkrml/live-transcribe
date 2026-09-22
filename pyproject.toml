@@ -1,5 +1,5 @@
 [project]
-name = "live-transcribe"
+name = "overhear-subs"
 version = "0.1.0"
 description = "Look-ahead live transcription for local video on Apple Silicon"
 requires-python = ">=3.12,<3.13"
