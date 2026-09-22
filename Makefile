@@ -1,6 +1,17 @@
 PORT ?= 8000
 LT_CACHE ?= $(HOME)/.cache/overhear-subs
 
+# Optional local overrides (copy .env.example). Plain KEY=value lines.
+-include .env
+
+# Keep this list in sync with the app's env vars.
+APP_VARS = PORT LT_CACHE LT_LOOKAHEAD LT_CHUNK LT_REMUX LT_TRANSLATE_MODEL \
+           HF_TOKEN HUGGING_FACE_HUB_TOKEN
+# Export only names that are actually set. `export FOO` on an undefined name
+# injects FOO="" into the child, and the float-parsed LT_* vars crash on that.
+export_if_set = $(if $(filter undefined,$(origin $(1))),,$(eval export $(1)))
+$(foreach v,$(APP_VARS),$(call export_if_set,$(v)))
+
 .DEFAULT_GOAL := help
 .PHONY: help setup run dev test check clean cache-clean
 
