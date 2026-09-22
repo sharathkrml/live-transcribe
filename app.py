@@ -20,7 +20,7 @@ from pipeline import LOOKAHEAD, VIDEO_EXT, LookaheadScheduler, PlaybackPrep, bui
 
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="live-transcribe")
+app = FastAPI(title="overhear-subs")
 
 
 @app.middleware("http")

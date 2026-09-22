@@ -1,11 +1,11 @@
 PORT ?= 8000
-LT_CACHE ?= $(HOME)/.cache/live-transcribe
+LT_CACHE ?= $(HOME)/.cache/overhear-subs
 
 .DEFAULT_GOAL := help
 .PHONY: help setup run dev test check clean cache-clean
 
 help:
-	@echo "live-transcribe"
+	@echo "overhear-subs"
 	@echo
 	@echo "  make setup       install deps"
 	@echo "  make run         start the server on :$(PORT)"
