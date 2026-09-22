@@ -123,7 +123,7 @@ body {
 
 /* ------------------------------------------------------------ controls */
 
-.btn, .seg button, .select select {
+.btn, .seg button {
   font: inherit;
   font-size: 12.5px;
   color: var(--fg);
@@ -137,10 +137,10 @@ body {
   transition: transform 100ms var(--ease-out), background-color 160ms var(--ease-out),
               opacity 160ms var(--ease-out);
 }
-.btn:hover, .seg button:hover, .select select:hover { background: color-mix(in srgb, var(--surface-raised) 82%, var(--fg) 18%); }
+.btn:hover, .seg button:hover { background: color-mix(in srgb, var(--surface-raised) 82%, var(--fg) 18%); }
 .btn:active, .seg button:active { transform: scale(0.965); }
 
-.btn:focus-visible, .seg button:focus-visible, .select select:focus-visible,
+.btn:focus-visible, .seg button:focus-visible,
 .meter:focus-visible, .toggle input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -156,20 +156,6 @@ body {
 .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #fff 12%); }
 .btn.large { font-size: 14px; padding: 10px 20px; border-radius: 11px; }
 .btn[disabled] { opacity: 0.45; pointer-events: none; }
-
-.select { display: flex; min-width: 0; }
-.select select {
-  appearance: none;
-  max-width: 240px;
-  padding-right: 26px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
-                    linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
-  background-position: calc(100% - 14px) 52%, calc(100% - 9px) 52%;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-}
 
 .seg { display: flex; }
 .seg button {
@@ -278,51 +264,6 @@ video { width: 100%; height: 100%; display: block; background: #000; }
   font-size: 12px;
   color: var(--fg-faint);
 }
-
-.field-label {
-  margin: 8px 0 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.055em;
-  text-transform: uppercase;
-  color: var(--fg-faint);
-}
-
-.chooser {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: min(420px, 100%);
-  text-align: left;
-}
-
-.choice {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  border: 1px solid var(--edge);
-  border-radius: 12px;
-  background: var(--surface-raised);
-  cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--top-edge);
-  transition: border-color 160ms var(--ease-out), background-color 160ms var(--ease-out);
-}
-.choice:hover { background: color-mix(in srgb, var(--surface-raised) 82%, var(--fg) 18%); }
-.choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.choice:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.choice input {
-  grid-row: 1 / span 2;
-  accent-color: var(--accent);
-  margin: 0;
-}
-.choice-label { font-size: 13.5px; font-weight: 560; letter-spacing: -0.004em; }
-.choice-detail { font-size: 12px; color: var(--fg-faint); grid-column: 2; }
 
 /* ----------------------------------------------------------- veil / banner */
 

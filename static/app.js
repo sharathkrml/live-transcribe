@@ -6,8 +6,6 @@ const el = {
   pulse: $("pulse"),
   fileName: $("file-name"),
   session: $("session"),
-  profile: $("profile"),
-  chooser: $("chooser"),
   transcript: $("transcript"),
   panelEmpty: $("panel-empty"),
   follow: $("follow"),
@@ -75,7 +73,6 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "hello") {
       S.lookahead = msg.lookahead;
-      if (msg.profiles) fillProfiles(msg.profiles, msg.profile);
       if (!msg.native_picker) showFallback();
       if (msg.media) restore(msg.media);
     } else if (msg.type === "cues") {
@@ -367,54 +364,6 @@ function clock(t) {
   return `${h ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
-function currentLabel() {
-  const opt = el.profile.selectedOptions[0];
-  return (opt && opt.textContent) || "model";
-}
-
-function selectedProfile() {
-  const checked = el.chooser.querySelector("input:checked");
-  return (checked && checked.value) || el.profile.value;
-}
-
-function syncChooser(name) {
-  if (!name) return;
-  el.profile.value = name;
-  const radio = el.chooser.querySelector(`input[value="${CSS.escape(name)}"]`);
-  if (radio) radio.checked = true;
-}
-
-function fillProfiles(profiles, current) {
-  if (!el.profile.options.length) {
-    for (const p of profiles) {
-      const opt = document.createElement("option");
-      opt.value = p.name;
-      opt.textContent = p.label;
-      el.profile.appendChild(opt);
-    }
-  }
-  if (!el.chooser.children.length) {
-    for (const p of profiles) {
-      const lab = document.createElement("label");
-      lab.className = "choice";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "profile-pick";
-      radio.value = p.name;
-      const name = document.createElement("span");
-      name.className = "choice-label";
-      name.textContent = p.label;
-      const detail = document.createElement("span");
-      detail.className = "choice-detail";
-      detail.textContent = p.detail || "";
-      lab.append(radio, name, detail);
-      el.chooser.appendChild(lab);
-    }
-    el.chooser.addEventListener("change", () => syncChooser(selectedProfile()));
-  }
-  syncChooser(current);
-}
-
 function showVeil({ title, file, hint, steps, bar } = {}) {
   el.empty.hidden = true;
   el.veil.hidden = false;
@@ -491,19 +440,6 @@ function paintPhase() {
     return;
   }
 
-  if (S.phase === "switching") {
-    showVeil({
-      title: `Switching to ${currentLabel()}`,
-      file,
-      hint: "Reloading models and restarting transcription…",
-      steps: { audio: "done", play: "done", model: "active" },
-    });
-    el.note.textContent = "Switching model…";
-    el.panelEmpty.hidden = false;
-    el.panelEmpty.textContent = "Reloading model…";
-    return;
-  }
-
   if (converting) {
     const pct = Math.round((S.playback.progress || 0) * 100);
     const why = S.playback.reason || "video";
@@ -524,7 +460,7 @@ function paintPhase() {
     showVeil({
       title: "Loading video",
       file,
-      hint: S.warming ? `Loading ${currentLabel()} in the background…` : "",
+      hint: S.warming ? "Loading Auto → English in the background…" : "",
       steps: { audio: "done", play: "active", model: S.warming ? "active" : "" },
     });
     el.note.textContent = "Loading video…";
@@ -534,7 +470,7 @@ function paintPhase() {
   hideVeil();
 
   if (S.hasMedia && S.warming) {
-    showBanner(`Loading ${currentLabel()}… first run may download the model`);
+    showBanner("Loading Auto → English… first run may download the model");
     if (!S.cues.length) {
       el.panelEmpty.hidden = false;
       el.panelEmpty.textContent = "Model is loading…";
@@ -599,11 +535,10 @@ async function open(path) {
     const res = await fetch("/api/open", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, profile: selectedProfile() }),
+      body: JSON.stringify({ path }),
     });
     if (!res.ok) throw new Error(await res.text());
     const info = await res.json();
-    if (info.profile) syncChooser(info.profile);
     applyMedia(path, info, `/media?t=${Date.now()}`);
   } catch (err) {
     S.phase = S.hasMedia ? "playing" : "idle";
@@ -705,35 +640,6 @@ el.emptyOpen.onclick = pick;
 el.fallback.onsubmit = (event) => {
   event.preventDefault();
   open(el.fallbackPath.value.trim());
-};
-
-el.profile.onchange = async () => {
-  syncChooser(el.profile.value);
-  if (!S.hasMedia) return;
-  const label = currentLabel();
-  S.phase = "switching";
-  S.videoReady = false;
-  S.warming = true;
-  paintPhase();
-  try {
-    const res = await fetch("/api/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: el.profile.value }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const info = await res.json();
-    if (info.duration != null) {
-      applyMedia(info.path, info, `/media?t=${Date.now()}`);
-    } else {
-      S.phase = "playing";
-      paintPhase();
-    }
-  } catch (err) {
-    S.phase = S.hasMedia ? "playing" : "idle";
-    setStatus(String(err.message || err), true);
-    paintPhase();
-  }
 };
 
 for (const btn of document.querySelectorAll(".seg button")) {

@@ -28,8 +28,7 @@ Requires macOS on Apple Silicon, plus `ffmpeg` and `uv`.
 
 ```sh
 brew install ffmpeg uv
-make setup              # en-en / ja-ja / ja-en-fast profiles
-make setup-mt           # + torch/transformers for the ja-en profile
+make setup              # install deps
 make run                # http://localhost:8000
 ```
 
@@ -54,51 +53,21 @@ make clean                       # drop .venv and caches
 make cache-clean                 # drop derived PCM / remuxed mp4
 ```
 
-## Language pairs
+## Language
 
-Pick from the dropdown. Adding a pair is one entry in `PROFILES`
-(`backends.py`):
-
-| Profile | Path |
-| --- | --- |
-| `en-en` | `whisper-large-v3-turbo`, transcribe |
-| `en-en-parakeet` | `parakeet-tdt-0.6b-v2` via MLX (English-only, fast) |
-| `ja-ja` | `kotoba-whisper-v2.0-mlx`, transcribe |
-| `ja-en` | kotoba transcribes, then NLLB-600M translates |
-| `ja-en-fast` | `whisper-large-v3` built-in `task=translate` (no `--extra mt`) |
-| `auto-en` | `whisper-large-v3` auto-detects the language, then built-in `task=translate` to English |
-
-More models need no code change — point at anything in the local
-Hugging Face cache (or any repo id / local snapshot dir):
-
-```sh
-# engine is inferred ("parakeet" in the name -> Parakeet, else Whisper/en)
-LT_ASR_MODELS="small=mlx-community/whisper-small-mlx,ft=./models/my-parakeet" make run
-```
-
-`LT_PARAKEET_MODEL` swaps the repo behind `en-en-parakeet`, and
-`LT_ASR_MODEL` / `LT_JA_ASR_MODEL` do the same for the Whisper profiles.
-`LT_TRANSLATE_MODEL` backs the translate profiles (`auto-en`, `ja-en-fast`) —
-it defaults to full `whisper-large-v3` because `large-v3-turbo` silently
-ignores `task="translate"` and transcribes instead.
-
-Switching profiles reloads that profile's models and restarts transcription
-from the current position.
+One profile: **Auto → English**. `whisper-large-v3` auto-detects the spoken
+language and its built-in `task=translate` renders the transcript in English,
+all in a single pass. Point `LT_TRANSLATE_MODEL` at another repo id to swap the
+model — `large-v3-turbo` will not work here because it silently ignores
+`task="translate"` and transcribes instead.
 
 ## Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HF_TOKEN` | — | Hugging Face token; also accepted as `HUGGING_FACE_HUB_TOKEN`, and used by both mlx-whisper and transformers |
+| `HF_TOKEN` | — | Hugging Face token; also accepted as `HUGGING_FACE_HUB_TOKEN` |
 | `LT_LOOKAHEAD` | `10.0` | seconds of transcript to keep ahead of the playhead |
-| `LT_PROFILE` | `en-en` | profile to start with |
-| `LT_ASR_MODEL` | `mlx-community/whisper-large-v3-turbo` | primary ASR repo |
-| `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | translate-profile ASR repo |
-| `LT_JA_ASR_MODEL` | `kaiinui/kotoba-whisper-v2.0-mlx` | Japanese ASR repo |
-| `LT_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v2` | Parakeet ASR repo |
-| `LT_ASR_MODELS` | — | extra `name=repo` profiles, comma-separated (local dirs OK) |
-| `LT_MT_MODEL` | `facebook/nllb-200-distilled-600M` | translation repo |
-| `LT_MT_DEVICE` | `cpu` | torch device for NLLB (`mps` is flaky with seq2seq) |
+| `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | ASR repo (must be translate-capable) |
 | `LT_REMUX` | `1` | convert unplayable files to a browser-safe mp4 (`0` disables) |
 | `LT_CACHE` | `~/.cache/live-transcribe` | derived PCM + remuxed mp4 |
 
