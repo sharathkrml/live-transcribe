@@ -37,8 +37,8 @@
 
 <main>
   <section class="stage">
-    <div class="frame">
-      <video id="video" controls playsinline preload="metadata"></video>
+    <div class="frame" id="frame">
+      <video id="video" playsinline preload="metadata"></video>
 
       <div class="empty" id="empty">
         <h1>Subtitles that arrive<br>before you do.</h1>
@@ -59,6 +59,7 @@
         </ol>
         <div class="bar" id="veil-bar" hidden><i id="veil-fill"></i></div>
         <p class="veil-hint" id="veil-hint"></p>
+        <button type="button" class="btn" id="cancel" hidden>Cancel</button>
       </div>
 
       <div class="banner" id="banner" hidden role="status">
@@ -74,6 +75,68 @@
       </div>
 
       <div class="overlay" id="overlay"></div>
+
+      <div class="controls" id="controls" role="group" aria-label="Player controls" hidden>
+        <button type="button" class="ctl-btn" id="play" aria-label="Play" title="Play / pause (Space)">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path class="i-play" d="M8 5v14l11-7z"/>
+            <path class="i-pause" d="M6 5h4v14H6zm8 0h4v14h-4z"/>
+          </svg>
+        </button>
+        <button type="button" class="ctl-btn" id="back10" aria-label="Back 10 seconds" title="Back 10s (J)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/>
+          </svg>
+        </button>
+        <button type="button" class="ctl-btn" id="fwd10" aria-label="Forward 10 seconds" title="Forward 10s (L)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5V1l5 5-5 5V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/>
+          </svg>
+        </button>
+
+        <div class="vol">
+          <button type="button" class="ctl-btn" id="mute" aria-label="Mute" title="Mute (M)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" stroke="none"/>
+              <path class="v-on" d="M16.5 8.5a5 5 0 0 1 0 7M18.7 6.3a8 8 0 0 1 0 11.4"/>
+              <path class="v-off" d="M16 9.5l5 5M21 9.5l-5 5"/>
+            </svg>
+          </button>
+          <input type="range" class="vol-slider" id="volume" min="0" max="1" step="0.01" value="1"
+                 aria-label="Volume">
+        </div>
+
+        <span class="ctl-time" id="ctl-time">0:00 / 0:00</span>
+
+        <span class="spacer"></span>
+
+        <div class="menu-wrap">
+          <button type="button" class="ctl-btn wide" id="speed" aria-haspopup="menu"
+                  aria-expanded="false" title="Playback speed (&lt; / &gt;)">1×</button>
+          <div class="ctl-menu" id="speed-menu" role="menu" hidden></div>
+        </div>
+
+        <button type="button" class="ctl-btn wide" id="captions" aria-pressed="true"
+                aria-label="Toggle captions" title="Captions (C)">CC</button>
+        <button type="button" class="ctl-btn" id="pip" aria-label="Picture in picture"
+                title="Picture in picture (P)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2"/>
+            <rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+        <button type="button" class="ctl-btn" id="fullscreen" aria-label="Fullscreen"
+                title="Fullscreen (F)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 9V5h4M15 5h4v4M20 15v4h-4M9 20H5v-4"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div class="meter" id="meter" role="slider" tabindex="0"
@@ -94,15 +157,43 @@
   <aside class="panel">
     <div class="panel-head">
       <h2>Transcript</h2>
-      <label class="toggle">
-        <input type="checkbox" id="follow" checked>
-        <span>Follow</span>
-      </label>
+      <div class="panel-actions">
+        <button type="button" class="btn" id="copy-all" title="Copy the whole transcript">Copy</button>
+        <label class="toggle">
+          <input type="checkbox" id="follow" checked>
+          <span>Follow</span>
+        </label>
+      </div>
     </div>
     <p class="panel-empty" id="panel-empty">Open a video to start.</p>
     <ol class="transcript" id="transcript"></ol>
   </aside>
 </main>
+
+<div class="help" id="help" hidden role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div class="help-card">
+    <div class="help-head">
+      <h2>Keyboard shortcuts</h2>
+      <button type="button" class="btn" id="help-close">Close</button>
+    </div>
+    <dl class="help-grid">
+      <dt>Space / K</dt><dd>Play / pause</dd>
+      <dt>← / →</dt><dd>Seek 5s (⇧ for 30s)</dd>
+      <dt>J / L</dt><dd>Seek 10s</dd>
+      <dt>↑ / ↓</dt><dd>Volume</dd>
+      <dt>M</dt><dd>Mute</dd>
+      <dt>0–9</dt><dd>Jump to 0–90%</dd>
+      <dt>Home / End</dt><dd>Start / end</dd>
+      <dt>, / .</dt><dd>Frame step (paused)</dd>
+      <dt>&lt; / &gt;</dt><dd>Playback speed</dd>
+      <dt>C</dt><dd>Toggle captions</dd>
+      <dt>F</dt><dd>Fullscreen</dd>
+      <dt>P</dt><dd>Picture in picture</dd>
+      <dt>⌘O</dt><dd>Open a video</dd>
+      <dt>?</dt><dd>This help</dd>
+    </dl>
+  </div>
+</div>
 
 <script src="/static/app.js"></script>
 </body>

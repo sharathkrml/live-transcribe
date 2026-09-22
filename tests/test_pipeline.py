@@ -1,7 +1,14 @@
 import time
 from pathlib import Path
 
-from pipeline import Cue, LookaheadScheduler, _needs_conversion, plan_chunks, reflow_cues
+from pipeline import (
+    Cue,
+    LookaheadScheduler,
+    PlaybackPrep,
+    _needs_conversion,
+    plan_chunks,
+    reflow_cues,
+)
 
 
 # ------------------------------------------------------- playback formats
@@ -27,6 +34,37 @@ def test_unplayable_codecs_are_detected():
 def test_unplayable_containers_are_detected():
     assert _needs_conversion(Path("clip.mkv"), {"video": "h264", "audio": "aac"}) == "container"
     assert _needs_conversion(Path("clip.avi"), {"video": "h264", "audio": "mp3"}) == "container"
+
+
+# -------------------------------------------------------------- cancelling
+
+
+class _FakeProc:
+    def __init__(self):
+        self.killed = False
+
+    def poll(self):
+        return None
+
+    def kill(self):
+        self.killed = True
+
+
+def test_cancel_kills_in_flight_conversion():
+    prep = PlaybackPrep(Path("clip.mkv"))
+    proc = _FakeProc()
+    prep._proc = proc
+    prep.cancel()
+    assert proc.killed is True
+    assert prep._cancelled.is_set()
+
+
+def test_cancel_is_safe_without_a_conversion():
+    prep = PlaybackPrep(Path("clip.mkv"))
+    prep.cancel()
+    prep.cancel()
+    assert prep._cancelled.is_set()
+    assert prep.error is None
 
 
 # --------------------------------------------------------------- planning

@@ -136,6 +136,8 @@ class PlaybackPrep:
         self.progress = 0.0
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
+        self._cancelled = threading.Event()
+        self._proc: subprocess.Popen | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -161,6 +163,13 @@ class PlaybackPrep:
 
         self._thread = threading.Thread(target=self._run, args=(codecs, cache), daemon=True)
         self._thread.start()
+
+    def cancel(self) -> None:
+        """Abandon an in-flight conversion; safe to call at any point."""
+        self._cancelled.set()
+        proc = self._proc
+        if proc and proc.poll() is None:
+            proc.kill()
 
     def _finish(self, output: Path) -> None:
         self.output = output
@@ -196,11 +205,18 @@ class PlaybackPrep:
                 _convert_args(self.source, part, codecs),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
+            self._proc = proc
             for line in proc.stdout:
+                if self._cancelled.is_set():
+                    proc.kill()
+                    break
                 if line.startswith("out_time_ms=") and duration > 0:
                     micros = int(line.split("=", 1)[1] or 0)
                     self.progress = min(1.0, micros / 1_000_000 / duration)
             proc.wait()
+            if self._cancelled.is_set():
+                part.unlink(missing_ok=True)
+                return
             if proc.returncode != 0:
                 raise RuntimeError((proc.stderr.read() or "ffmpeg failed").strip()[-300:])
             part.replace(cache)
@@ -210,6 +226,7 @@ class PlaybackPrep:
             self.error = f"{type(exc).__name__}: {exc}"
             part.unlink(missing_ok=True)
         finally:
+            self._proc = None
             self._ready.set()
 
 

@@ -71,6 +71,10 @@ class Session:
 
 session = Session()
 
+# Bumped by every open/reset. A slow open that finishes after a reset must not
+# install its session — the user cancelled it.
+_open_gen = 0
+
 
 class OpenReq(BaseModel):
     path: str
@@ -183,15 +187,21 @@ def pick() -> dict:
 
 @app.post("/api/open")
 def open_media(req: OpenReq) -> dict:
+    global _open_gen
     path = Path(os.path.expanduser(req.path)).resolve()
     if not path.is_file():
         raise HTTPException(404, f"not found: {path}")
 
     _teardown()
+    _open_gen += 1
+    gen = _open_gen
     # Kick the (possibly slow) conversion off first so it overlaps audio prep.
     playback = PlaybackPrep(path)
     playback.start()
     source, duration, chunks = build_media(path)
+    if gen != _open_gen:
+        playback.cancel()
+        raise HTTPException(409, "open cancelled")
     backend = backends.get_backend()
 
     def run_chunk(idx: int, t0: float, t1: float):
@@ -248,6 +258,8 @@ def seek(req: SeekReq) -> dict:
 @app.post("/api/reset")
 def reset() -> dict:
     """Drop the current session so the next open starts fresh."""
+    global _open_gen
+    _open_gen += 1
     _teardown()
     session.path = None
     session.playback = None
@@ -295,6 +307,8 @@ def _disposition(name: str) -> dict:
 
 
 def _teardown() -> None:
+    if session.playback:
+        session.playback.cancel()
     if session.scheduler:
         session.scheduler.stop()
         session.scheduler = None

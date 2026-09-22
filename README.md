@@ -37,8 +37,11 @@ open panel, not a web upload, so nothing is copied and nothing leaves the
 machine. The first transcription waits for the model to load; after that it
 stays resident.
 
-Keyboard: `⌘O` opens a video, `Space` plays/pauses, `←`/`→` seek 5s
-(`⇧` for 30s), and the timeline under the video is drag-scrubbable.
+Keyboard: `⌘O` opens a video, `Space`/`K` plays/pauses, `←`/`→` seek 5s
+(`⇧` for 30s), `J`/`L` seek 10s, `↑`/`↓` volume, `M` mute, `0`–`9` jump to a
+percentage, `<`/`>` change speed, `C` toggles captions, `F` fullscreen, `P`
+picture-in-picture, `?` shows the full list, and `Esc` cancels an in-progress
+open. The timeline under the video is drag-scrubbable.
 
 All Python goes through `uv` — no manual venv activation.
 
