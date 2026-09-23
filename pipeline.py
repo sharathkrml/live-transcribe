@@ -1,8 +1,9 @@
 """Media prep, chunk planning, and the look-ahead scheduler.
 
 The whole trick: a local video's audio track is random-access once demuxed to
-raw PCM, so "10 seconds ahead of the playhead" is just an index into a
-memmap. No streaming ASR, no ring buffer, no VAD.
+raw PCM. Transcription is just an index into a memmap, so we can transcribe
+whatever is about to play before the playhead gets there. No streaming ASR, no
+ring buffer, no VAD.
 """
 
 from __future__ import annotations
