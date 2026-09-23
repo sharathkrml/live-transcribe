@@ -17,12 +17,12 @@ Play a local video — the words are already on screen when the scene reaches th
 
 ## The idea
 
-> Transcribe **ahead** of the playhead, not behind it.
+> Transcribe what's **about to play**, before you get there.
 
 ```mermaid
 flowchart LR
     A([playhead]) --> B["captions already here"]
-    A -. "+10s transcript window" .-> C["transcribing next chunk"]
+    A -. "upcoming chunks" .-> C["transcribing next chunk"]
     C -. "idle when not needed" .-> D["queued"]
 ```
 
@@ -30,7 +30,7 @@ An 88-second clip is cut into 3 chunks. At `playhead = 0`, **one** is transcribe
 
 | Playhead | Scheduler |
 | --- | --- |
-| Playing | keeps the next chunk hot |
+| Playing | keeps the chunk you're about to hit in the queue |
 | Paused | freezes the window, GPU rests |
 | Rewound | re-serves from cache, never re-runs the model |
 
@@ -62,7 +62,7 @@ flowchart TB
 | --- | --- |
 | **Demux** | `ffmpeg` → mono 16 kHz float32 PCM, cached by `path + size + mtime`. Loaded as `np.memmap`, so seeking is just `SAMPLE_RATE * seconds` — an array index. No decode-on-the-fly, no VAD. |
 | **Chunking** | `plan_chunks` cuts ~30s windows; `silencedetect` (≥0.4s below −35 dB) nudges each edge up to ±6s so words never split mid-vowel. |
-| **Scheduler** | One thread, one rule: transcribe chunk `i` only while `chunks[i].start <= playhead + 10s`. The chunk you're about to hit jumps the queue; the rest fills in progressively. |
+| **Scheduler** | One thread, one rule: transcribe the chunk the playhead is inside, plus the ones coming up soon after it, then rest. The chunk you're about to hit jumps the queue; the rest fills in progressively. |
 | **Whisper** | `mlx-community/whisper-large-v3-mlx` on the Apple GPU. Built-in `task="translate"` renders any spoken language as English in a single pass. Full `large-v3`, not turbo — turbo silently ignores translation. |
 | **Reflow** | `reflow_cues` splits long segments into ≤ 2 balanced lines (≤ 42 chars), re-timed proportionally. CJK hard-wraps. No 3rd line covering the actor's face. |
 
@@ -112,7 +112,7 @@ Drag the timeline to scrub — it doubles as a pipeline meter, one cell per chun
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` | — | Hugging Face token (also `HUGGING_FACE_HUB_TOKEN`) |
-| `LT_LOOKAHEAD` | `10.0` | seconds of transcript kept ahead of the playhead |
+| `LT_LOOKAHEAD` | `10.0` | minimum transcript runway (seconds) the worker keeps before pausing |
 | `LT_CHUNK` | `30.0` | chunk length in seconds; shorter means a seek waits less for captions |
 | `LT_TRANSLATE_MODEL` | `mlx-community/whisper-large-v3-mlx` | ASR repo (must be translate-capable) |
 | `LT_REMUX` | `1` | convert unplayable files to browser-safe mp4 (`0` disables) |
@@ -133,7 +133,7 @@ HF_TOKEN=hf_xxx LT_LOOKAHEAD=15 make run
 
 ## Limits (the honest part)
 
-- **Buffer overshoots up to one chunk** (`LT_CHUNK`, default 30s) — guarantees *at least* `LT_LOOKAHEAD` seconds ahead.
+- **How far ahead is approximate.** The worker keeps transcribing until the upcoming chunks are covered, so the runway follows chunk boundaries (~30s, `LT_CHUNK`) rather than landing on an exact number of seconds.
 - **One video at a time.** `/media` serves the current file; opening another cancels what's in flight.
 - **Cached conversions are re-probed** — a stale cache is discarded, not served.
 - **File panel uses `osascript`** (`app.py:choose_file`). macOS may ask once to control System Events (only to bring the panel forward); denied = panel may open behind the browser. Non-macOS falls back to a path field.

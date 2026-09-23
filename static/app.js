@@ -25,6 +25,8 @@ const el = {
   fileName: $("file-name"),
   session: $("session"),
   transcript: $("transcript"),
+  panelIntro: $("panel-intro"),
+  panelSkeleton: $("panel-skeleton"),
   panelEmpty: $("panel-empty"),
   follow: $("follow"),
   status: $("status"),
@@ -75,6 +77,7 @@ const S = {
   warming: false,
   videoReady: false,
   playback: null,
+  prep: null,
   captions: true,
   speed: 1,
   helpOpen: false,
@@ -148,7 +151,15 @@ function addCues(items) {
   const nearBottom =
     el.transcript.scrollHeight - el.transcript.scrollTop - el.transcript.clientHeight < 90;
   for (const cue of fresh) el.transcript.appendChild(row(cue));
-  el.panelEmpty.hidden = true;
+  // A backfill (open / seek) drops a whole batch at once; stagger the first few
+  // so it reads as lines arriving, not a flash. Capped so it never feels slow.
+  if (fresh.length > 1) {
+    fresh.forEach((cue, i) => {
+      const li = S.rows.get(cue.key);
+      if (li) li.style.animationDelay = `${Math.min(i, 8) * 30}ms`;
+    });
+  }
+  showPanel(null);
   el.export.hidden = false;
   if (nearBottom && el.follow.checked) el.transcript.scrollTop = el.transcript.scrollHeight;
   if (!S.warming) hideBanner();
@@ -251,7 +262,7 @@ function clearCues() {
   S.finished = false;
   el.transcript.replaceChildren();
   el.meterCells.replaceChildren();
-  el.panelEmpty.hidden = false;
+  showPanel(null);
   el.export.hidden = true;
   el.save.hidden = true;
   el.overlay.textContent = "";
@@ -354,9 +365,13 @@ function setActive(key) {
 }
 
 function renderState(state) {
+  if (state.playback) S.playback = state.playback;
+  if (state.prep) S.prep = state.prep;
   if (!S.hasMedia) {
     el.pulse.classList.remove("live", "done");
-    if (S.phase === "idle") {
+    if (S.phase === "opening") {
+      paintPhase();
+    } else if (S.phase === "idle") {
       el.note.textContent = "No video open";
       el.note.classList.remove("ahead");
     }
@@ -364,7 +379,6 @@ function renderState(state) {
   }
   S.finished = !!state.finished;
   S.warming = !!state.warming;
-  if (state.playback) S.playback = state.playback;
 
   paintCells(state);
 
@@ -385,16 +399,21 @@ function renderState(state) {
   const ahead = state.ahead ?? 0;
   const done = state.chunks_done ?? 0;
   const total = state.chunks_total ?? 0;
+  const working = !S.finished && !S.warming && !state.error;
   el.note.classList.toggle("ahead", (S.finished || ahead >= S.lookahead) && !S.warming);
+  el.note.classList.toggle("behind", working && ahead < 0);
   if (state.error) {
     el.note.textContent = "Transcription error";
     setStatus(state.error, true);
-  } else if (S.finished) {
-    el.note.textContent = "Fully transcribed";
   } else if (S.warming) {
     el.note.textContent = "Loading model…";
   } else {
-    el.note.textContent = total ? `Transcribing ${done}/${total}` : "Transcribing…";
+    // The headline number: how much transcript is already saved past the
+    // playhead, measured live — not a fixed window.
+    const lead = ahead >= 0
+      ? `+${ahead.toFixed(1)}s transcribed`
+      : `${Math.abs(ahead).toFixed(1)}s behind`;
+    el.note.textContent = total ? `${lead} · ${done}/${total}` : lead;
   }
 }
 
@@ -466,6 +485,14 @@ function hideVeil() {
   if (!S.hasMedia) el.empty.hidden = false;
 }
 
+// The right panel is never blank: intro before a video, skeleton while its
+// transcript is being prepared, text for a status, nothing once cues exist.
+function showPanel(mode) {
+  el.panelIntro.hidden = mode !== "intro";
+  el.panelSkeleton.hidden = mode !== "loading";
+  el.panelEmpty.hidden = mode !== "text";
+}
+
 function showBanner(text) {
   el.bannerText.textContent = text;
   el.banner.hidden = false;
@@ -485,8 +512,8 @@ function paintPhase() {
     hideBanner();
     el.save.hidden = true;
     el.note.textContent = "No video open";
-    el.note.classList.remove("ahead");
-    el.panelEmpty.hidden = false;
+    el.note.classList.remove("ahead", "behind");
+    showPanel("intro");
     el.panelEmpty.textContent = "Open a video to start.";
     return;
   }
@@ -497,22 +524,27 @@ function paintPhase() {
       hint: "The file panel should be in front of the browser",
     });
     el.note.textContent = "Waiting for a file…";
-    el.panelEmpty.hidden = false;
-    el.panelEmpty.textContent = "Waiting for a video.";
+    showPanel("text");
+    el.panelEmpty.textContent = "Waiting for a video…";
     return;
   }
 
   if (S.phase === "opening") {
+    const prep = S.prep;
+    const pct = prep ? Math.round(clamp01(prep.progress || 0) * 100) : 0;
     showVeil({
       title: "Opening",
       file,
-      hint: "Extracting audio and planning chunks… (Esc to cancel)",
+      hint: prep
+        ? `${prep.label}… ${pct}% (Esc to cancel)`
+        : "Extracting audio and planning chunks… (Esc to cancel)",
       steps: { audio: "active", play: "", model: "" },
+      bar: prep ? clamp01(prep.progress || 0) : null,
       cancel: true,
     });
-    el.note.textContent = "Opening…";
-    el.panelEmpty.hidden = false;
-    el.panelEmpty.textContent = "Extracting audio…";
+    el.note.textContent = prep ? `${prep.label}…` : "Opening…";
+    showPanel("loading");
+    el.panelEmpty.textContent = prep ? `${prep.label}…` : "Extracting audio…";
     return;
   }
 
@@ -528,7 +560,7 @@ function paintPhase() {
       cancel: true,
     });
     el.note.textContent = `Converting… ${pct}%`;
-    el.panelEmpty.hidden = false;
+    showPanel("loading");
     el.panelEmpty.textContent = "Preparing playback…";
     return;
   }
@@ -548,19 +580,10 @@ function paintPhase() {
 
   if (S.hasMedia && S.warming) {
     showBanner("Loading Auto → English… first run downloads ~3 GB");
-    if (!S.cues.length) {
-      el.panelEmpty.hidden = false;
-      el.panelEmpty.textContent = "Model is loading…";
-    }
   } else {
     hideBanner();
-    if (!S.cues.length) {
-      el.panelEmpty.hidden = false;
-      el.panelEmpty.textContent = S.hasMedia
-        ? "Lines land here as they’re transcribed."
-        : "Open a video to start.";
-    }
   }
+  if (!S.cues.length) showPanel("loading");
 }
 
 // -------------------------------------------------------------- transport
@@ -706,6 +729,7 @@ async function open(path) {
   if (!path) return;
   const gen = ++S.gen;
   S.phase = "opening";
+  S.prep = null;
   el.fileName.textContent = path.split("/").pop();
   el.fileName.title = path;
   paintPhase();
@@ -744,6 +768,7 @@ function resetSession() {
   S.duration = 0;
   S.mediaInfo = null;
   S.playback = null;
+  S.prep = null;
   S.videoReady = false;
   S.warming = false;
   S.pendingVideo = null;
