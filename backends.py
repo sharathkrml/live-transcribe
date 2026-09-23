@@ -7,9 +7,12 @@ so there is a single backend and no separate translation stage.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
-from pipeline import Cue
+import numpy as np
+
+from pipeline import SAMPLE_RATE, Cue
 
 # large-v3-turbo silently ignores task="translate" (it just transcribes), so use
 # the full large-v3 weights, which are translate-capable.
@@ -46,19 +49,36 @@ class WhisperASR:
         self.language = language
         self.task = task
         self._prompt: str | None = None
+        # mlx_whisper's model cache is process-global, so serialise the first
+        # load: a startup warm and an early chunk must not both load it.
+        self._lock = threading.Lock()
+
+    def warm(self) -> None:
+        """Load the weights now so the first chunk doesn't stall mid-playback."""
+        import mlx_whisper
+
+        with self._lock:
+            mlx_whisper.transcribe(
+                np.zeros(SAMPLE_RATE, dtype=np.float32),
+                path_or_hf_repo=resolve_model(self.model),
+                language=self.language,
+                task=self.task,
+                condition_on_previous_text=False,
+            )
 
     def run(self, audio, offset: float) -> list[Cue]:
         import mlx_whisper
 
-        result = mlx_whisper.transcribe(
-            audio,
-            path_or_hf_repo=resolve_model(self.model),
-            language=self.language,
-            task=self.task,
-            initial_prompt=self._prompt,
-            condition_on_previous_text=False,
-            no_speech_threshold=0.6,
-        )
+        with self._lock:
+            result = mlx_whisper.transcribe(
+                audio,
+                path_or_hf_repo=resolve_model(self.model),
+                language=self.language,
+                task=self.task,
+                initial_prompt=self._prompt,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+            )
 
         cues: list[Cue] = []
         for seg in result.get("segments", []):

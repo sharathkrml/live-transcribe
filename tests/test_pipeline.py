@@ -7,6 +7,7 @@ from pipeline import (
     PlaybackPrep,
     _convert_args,
     _needs_conversion,
+    _run_ffmpeg,
     plan_chunks,
     reflow_cues,
 )
@@ -75,6 +76,48 @@ def test_cancel_is_safe_without_a_conversion():
     prep.cancel()
     assert prep._cancelled.is_set()
     assert prep.error is None
+
+
+# ------------------------------------------------------------- prep progress
+
+
+def test_ffmpeg_progress_is_reported_and_clamped(monkeypatch):
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self, lines):
+            self.stderr = iter(lines)
+
+        def wait(self):
+            return 0
+
+    lines = [
+        "out_time_ms=2000000\n",  # 2s of a 4s file -> 0.5
+        "out_time_ms=bogus\n",
+        "out_time_ms=9000000\n",  # past the end -> clamped to 1.0
+        "[silencedetect @ 0x0] silence_start: 1.0\n",
+    ]
+    monkeypatch.setattr("pipeline.subprocess.Popen", lambda *a, **k: FakeProc(lines))
+    seen = []
+    log = _run_ffmpeg(["ffmpeg"], duration=4.0, on_progress=seen.append)
+    assert seen == [0.5, 1.0]
+    assert "silence_start" in log
+
+
+def test_ffmpeg_progress_needs_a_duration(monkeypatch):
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self):
+            self.stderr = iter(["out_time_ms=1000000\n"])
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("pipeline.subprocess.Popen", lambda *a, **k: FakeProc())
+    seen = []
+    _run_ffmpeg(["ffmpeg"], duration=0.0, on_progress=seen.append)
+    assert seen == []
 
 
 # --------------------------------------------------------------- planning

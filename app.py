@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -20,7 +22,25 @@ from pipeline import LOOKAHEAD, VIDEO_EXT, LookaheadScheduler, PlaybackPrep, bui
 
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="overhear-subs")
+log = logging.getLogger("overhear-subs")
+
+
+def _warm_backend() -> None:
+    """Load the ASR weights at boot, not on the first chunk of a video."""
+    try:
+        backends.get_backend().warm()
+    except Exception:
+        log.exception("model warm-up failed; it will load lazily on first use")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Backgrounded so the server can answer before a ~3 GB first-run download.
+    threading.Thread(target=_warm_backend, daemon=True, name="warm-backend").start()
+    yield
+
+
+app = FastAPI(title="overhear-subs", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -60,11 +80,31 @@ def choose_file() -> str | None:
 
 
 
+class Prep:
+    """Media-prep progress for the opening veil: "audio" then "silence"."""
+
+    _LABELS = {"audio": "Extracting audio", "silence": "Planning chunks"}
+
+    def __init__(self) -> None:
+        self.stage = "audio"
+        self.progress = 0.0
+
+    def update(self, stage: str, frac: float) -> None:
+        base = 0.0 if stage == "audio" else 0.5
+        self.stage = stage
+        self.progress = base + max(0.0, min(1.0, frac)) * 0.5
+
+    def state(self) -> dict:
+        return {"label": self._LABELS.get(self.stage, "Preparing"),
+                "progress": round(self.progress, 3)}
+
+
 class Session:
     def __init__(self) -> None:
         self.path: Path | None = None
         self.playback: PlaybackPrep | None = None
         self.scheduler: LookaheadScheduler | None = None
+        self.prep: Prep | None = None
         self.clients: set[WebSocket] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
 
@@ -90,11 +130,13 @@ class SeekReq(BaseModel):
 
 
 def _state_payload() -> dict:
-    if not session.scheduler:
-        return {}
-    payload = session.scheduler.state()
+    payload: dict = {}
+    if session.prep:
+        payload["prep"] = session.prep.state()
     if session.playback:
         payload["playback"] = session.playback.state()
+    if session.scheduler:
+        payload.update(session.scheduler.state())
     return payload
 
 
@@ -202,10 +244,24 @@ def open_media(req: OpenReq) -> dict:
     # Kick the (possibly slow) conversion off first so it overlaps audio prep.
     playback = PlaybackPrep(path)
     playback.start()
-    source, duration, chunks = build_media(path)
+    prep = Prep()
+    if gen == _open_gen:
+        session.playback = playback
+        session.prep = prep
+    # build_media blocks this worker thread, but the event loop keeps pumping
+    # websocket state, so the veil sees prep progress while it runs.
+    try:
+        source, duration, chunks = build_media(path, prep.update)
+    except Exception:
+        playback.cancel()
+        if gen == _open_gen:
+            session.playback = None
+            session.prep = None
+        raise
     if gen != _open_gen:
         playback.cancel()
         raise HTTPException(409, "open cancelled")
+    session.prep = None
     backend = backends.get_backend()
 
     def run_chunk(idx: int, t0: float, t1: float):
@@ -317,6 +373,7 @@ def _teardown() -> None:
     if session.scheduler:
         session.scheduler.stop()
         session.scheduler = None
+    session.prep = None
     session.path = None
 
 

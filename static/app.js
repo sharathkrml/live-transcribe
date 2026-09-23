@@ -75,6 +75,7 @@ const S = {
   warming: false,
   videoReady: false,
   playback: null,
+  prep: null,
   captions: true,
   speed: 1,
   helpOpen: false,
@@ -354,9 +355,13 @@ function setActive(key) {
 }
 
 function renderState(state) {
+  if (state.playback) S.playback = state.playback;
+  if (state.prep) S.prep = state.prep;
   if (!S.hasMedia) {
     el.pulse.classList.remove("live", "done");
-    if (S.phase === "idle") {
+    if (S.phase === "opening") {
+      paintPhase();
+    } else if (S.phase === "idle") {
       el.note.textContent = "No video open";
       el.note.classList.remove("ahead");
     }
@@ -364,7 +369,6 @@ function renderState(state) {
   }
   S.finished = !!state.finished;
   S.warming = !!state.warming;
-  if (state.playback) S.playback = state.playback;
 
   paintCells(state);
 
@@ -503,16 +507,21 @@ function paintPhase() {
   }
 
   if (S.phase === "opening") {
+    const prep = S.prep;
+    const pct = prep ? Math.round(clamp01(prep.progress || 0) * 100) : 0;
     showVeil({
       title: "Opening",
       file,
-      hint: "Extracting audio and planning chunks… (Esc to cancel)",
+      hint: prep
+        ? `${prep.label}… ${pct}% (Esc to cancel)`
+        : "Extracting audio and planning chunks… (Esc to cancel)",
       steps: { audio: "active", play: "", model: "" },
+      bar: prep ? clamp01(prep.progress || 0) : null,
       cancel: true,
     });
-    el.note.textContent = "Opening…";
+    el.note.textContent = prep ? `${prep.label}…` : "Opening…";
     el.panelEmpty.hidden = false;
-    el.panelEmpty.textContent = "Extracting audio…";
+    el.panelEmpty.textContent = prep ? `${prep.label}…` : "Extracting audio…";
     return;
   }
 
@@ -706,6 +715,7 @@ async function open(path) {
   if (!path) return;
   const gen = ++S.gen;
   S.phase = "opening";
+  S.prep = null;
   el.fileName.textContent = path.split("/").pop();
   el.fileName.title = path;
   paintPhase();
@@ -744,6 +754,7 @@ function resetSession() {
   S.duration = 0;
   S.mediaInfo = null;
   S.playback = null;
+  S.prep = null;
   S.videoReady = false;
   S.warming = false;
   S.pendingVideo = null;

@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -60,17 +61,42 @@ def _cache_key(video: Path) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
-def extract_pcm(video: Path) -> Path:
+def _run_ffmpeg(args: list[str], duration: float = 0.0,
+                on_progress: Callable[[float], None] | None = None) -> str:
+    """Run ffmpeg, reporting fraction done from its own -progress lines.
+
+    `-progress pipe:2` interleaves progress with the log on stderr, so one
+    stream carries both (silencedetect output and progress arrive together).
+    """
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    log: list[str] = []
+    for line in proc.stderr:
+        log.append(line)
+        if on_progress and duration > 0 and line.startswith("out_time_ms="):
+            try:
+                micros = int(line.split("=", 1)[1] or 0)
+            except ValueError:
+                continue
+            on_progress(min(1.0, micros / 1_000_000 / duration))
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError("".join(log[-5:]).strip() or "ffmpeg failed")
+    return "".join(log)
+
+
+def extract_pcm(video: Path, duration: float = 0.0,
+                on_progress: Callable[[float], None] | None = None) -> Path:
     """Demux the audio track to mono 16k float32, cached by file identity."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     out = CACHE_DIR / f"{_cache_key(video)}.f32"
     meta = out.with_suffix(".json")
     if out.exists() and meta.exists() and out.stat().st_size > 0:
         return out
-    subprocess.run(
+    _run_ffmpeg(
         ["ffmpeg", "-v", "error", "-y", "-i", str(video),
-         "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", str(out)],
-        check=True,
+         "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le",
+         "-progress", "pipe:2", "-nostats", str(out)],
+        duration, on_progress,
     )
     meta.write_text(json.dumps({"source": str(video)}))
     return out
@@ -258,16 +284,18 @@ def _convert_args(video: Path, out: Path, codecs: dict[str, str]) -> list[str]:
 _SILENCE = re.compile(r"silence_(start|end):\s*(-?[\d.]+)")
 
 
-def detect_silences(video: Path) -> list[float]:
+def detect_silences(video: Path, duration: float = 0.0,
+                    on_progress: Callable[[float], None] | None = None) -> list[float]:
     """Midpoints of silence regions, used to avoid cutting mid-word."""
-    proc = subprocess.run(
+    stderr = _run_ffmpeg(
         ["ffmpeg", "-v", "info", "-i", str(video),
-         "-af", "silencedetect=n=-35dB:d=0.4", "-f", "null", "-"],
-        capture_output=True, text=True,
+         "-af", "silencedetect=n=-35dB:d=0.4", "-f", "null",
+         "-progress", "pipe:2", "-nostats", "-"],
+        duration, on_progress,
     )
     starts: list[float] = []
     mids: list[float] = []
-    for kind, value in _SILENCE.findall(proc.stderr):
+    for kind, value in _SILENCE.findall(stderr):
         t = float(value)
         if t < 0:
             continue
@@ -427,11 +455,19 @@ class AudioSource:
         return np.array(self.data[a:b], dtype=np.float32)
 
 
-def build_media(video: Path) -> tuple[AudioSource, float, list[tuple[float, float]]]:
-    pcm = extract_pcm(video)
+def build_media(
+    video: Path,
+    on_progress: Callable[[str, float], None] | None = None,
+) -> tuple[AudioSource, float, list[tuple[float, float]]]:
+    """Extract audio + plan chunks, reporting ("audio"|"silence", fraction)."""
+    report = on_progress or (lambda stage, frac: None)
+    duration = _duration(video)
+    pcm = extract_pcm(video, duration, lambda f: report("audio", f))
+    report("audio", 1.0)  # a cache hit jumps straight here
     source = AudioSource(pcm)
     duration = source.duration
-    return source, duration, plan_chunks(duration, detect_silences(video))
+    silences = detect_silences(video, duration, lambda f: report("silence", f))
+    return source, duration, plan_chunks(duration, silences)
 
 
 # --------------------------------------------------------------------------
